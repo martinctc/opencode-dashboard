@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.py[cod]
+opencode_usage_*.csv
+usage_dashboard.html
+*.db
+*.db-shm
+*.db-wal
