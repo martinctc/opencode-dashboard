@@ -33,7 +33,8 @@ def test_build_dashboard_writes_offline_html(tmp_path):
 
     assert "OpenCode Usage Dashboard" in html
     assert "140" in html
-    assert "input_tokens" in html
+    # Token categories are labelled for display rather than by raw column name.
+    assert "Input" in html and "Output" in html
     assert not re.search(r'<script[^>]+src=["\']https://cdn\.plot\.ly', html)
 
 
