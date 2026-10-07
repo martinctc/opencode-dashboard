@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (c) Microsoft Corporation.
+# Copyright (c) 2026 OpenCode Usage Dashboard contributors.
+# Licensed under the MIT License.
+#
+# Derived from microsoft/ghc-cli-dashboard. See README.md for attribution.
 """Export token and cost usage from OpenCode's local SQLite database."""
 
 import argparse
