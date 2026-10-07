@@ -4,6 +4,7 @@
 import argparse
 import glob
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -29,6 +30,102 @@ CATEGORY_LABELS = {
     "reasoning_tokens": "Reasoning",
 }
 TOP_N = 10
+
+# Page stylesheet. Kept as a plain string rather than an f-string so the CSS
+# braces do not need escaping, and so the design tokens live in one place.
+PAGE_CSS = """
+:root {
+  --accent: #2f6feb;
+  --accent-dark: #1a4fc4;
+  --aggregate: #0072b2;
+  --good: #1a7f37;
+  --warn: #9a6700;
+  --bg: #f4f4f4;
+  --card-bg: #ffffff;
+  --surface: #f6f8fb;
+  --surface-hover: #eef1f6;
+  --border: #e5e7eb;
+  --text: #111827;
+  --muted: #59636e;
+  --shadow: none;
+  --shadow-hover: 0 1px 2px rgba(20, 30, 50, 0.05);
+}
+* { box-sizing: border-box; }
+body {
+  font-family: "Segoe UI Variable", "Segoe UI", -apple-system, Roboto, system-ui, sans-serif;
+  margin: 0; padding: 0; background: var(--bg); color: var(--text); line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.hero {
+  background: var(--card-bg); padding: 20px 32px 14px; border-bottom: 1px solid var(--border);
+}
+.hero h1 { margin: 0 0 4px; font-size: 26px; font-weight: 650; letter-spacing: -0.01em; }
+.hero .subtitle { color: var(--muted); margin: 0; font-size: 13px; }
+.nav-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 16px; }
+.nav-pills a {
+  color: var(--accent-dark); text-decoration: none; font-size: 13px; font-weight: 600;
+  padding: 6px 12px; border-radius: 6px; background: var(--surface);
+  border: 1px solid var(--border); transition: background 0.15s;
+}
+.nav-pills a:hover { background: #eef3ff; }
+.nav-pills a:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 3px; }
+.page { padding: 20px 32px 48px; max-width: 1600px; margin: auto; }
+.section { margin-bottom: 8px; scroll-margin-top: 14px; }
+.section-head { display: flex; align-items: baseline; gap: 10px; margin: 28px 0 10px; }
+#sec-overview > .section-head { margin-top: 0; }
+.section-head h2 { font-size: 19px; font-weight: 650; margin: 0; }
+.section-desc { color: var(--muted); font-size: 13px; margin: 0 0 16px; max-width: 780px; }
+.kpi-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px; margin-bottom: 12px;
+}
+/* Aggregate KPIs share one accent bar; chart palettes follow the encoded data type. */
+.kpi {
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-top: 3px solid var(--aggregate); border-radius: 10px;
+  padding: 14px 18px; min-width: 0;
+}
+.kpi-label { font-size: 13px; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+.kpi-value { font-size: 36px; font-weight: 700; letter-spacing: -0.01em; }
+.kpi-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.scope-summary { color: var(--muted); font-size: 13px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.card {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px; margin-bottom: 0; min-width: 0; box-shadow: var(--shadow);
+  transition: box-shadow 0.15s;
+}
+.card:hover { box-shadow: var(--shadow-hover); }
+.full { grid-column: 1 / -1; }
+.footer-note {
+  margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--muted);
+}
+.footer-note p { margin: 6px 0; }
+@media (max-width: 1100px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .kpi-value { font-size: 30px; }
+}
+@media (max-width: 760px) {
+  .hero { padding: 16px; }
+  .hero h1 { font-size: 22px; }
+  .page { padding: 16px; }
+  .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .kpi { padding: 12px; }
+  .kpi-value { font-size: 28px; }
+  .card { padding: 10px; }
+  .nav-pills a { min-height: 44px; display: inline-flex; align-items: center; }
+}
+"""
+
+SECTIONS = [
+    ("sec-overview", "Overview",
+     "Recorded OpenCode usage totals, the day they were used, and how they "
+     "split across projects and models. Cost is reported by OpenCode, not an invoice."),
+    ("sec-composition", "Composition",
+     "Which token categories make up the recorded usage, and how it splits "
+     "across the providers that served it."),
+]
 
 
 def load_data(pattern: str) -> pd.DataFrame:
@@ -171,6 +268,23 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     model_chart.update_layout(yaxis={"categoryorder": "total ascending"})
     project_chart.update_layout(yaxis={"categoryorder": "total ascending"})
 
+    # Dates arrive as datetime.date from load_data, but callers may pass raw strings.
+    dates = sorted(pd.Timestamp(value).date() for value in data["date"].unique())
+    latest = dates[-1].isoformat()
+    first = dates[0].isoformat()
+    span = f"{first} to {latest}" if len(dates) > 1 else first
+    users = data["user"].nunique()
+    scope_summary = (
+        f"{span} &middot; {data['project'].nunique()} projects &middot; "
+        f"{data['model'].nunique()} models &middot; {users} user"
+        f"{'s' if users != 1 else ''}"
+    )
+    subtitle = (
+        f"Data through {latest} &middot; "
+        f"generated {datetime.now():%Y-%m-%d %H:%M} &middot; local session-store exports"
+    )
+    hidden_models = data["model"].nunique() - len(by_model)
+
     figures = [
         (token_chart, 380),
         (cost_chart, 380),
@@ -180,59 +294,98 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         (provider_chart, 380),
     ]
     for fig, height in figures:
-        fig.update_layout(height=height, margin={"t": 48, "b": 56, "l": 64, "r": 24})
-    charts = "".join(
-        '<figure class="chart">'
-        + pio.to_html(
-            fig,
+        fig.update_layout(
+            height=height,
+            margin={"t": 48, "b": 56, "l": 64, "r": 24},
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            font={"family": "Segoe UI, sans-serif", "size": 12, "color": "#374151"},
+        )
+
+    def card(figure_html: str, full: bool = False) -> str:
+        css = "card full" if full else "card"
+        return f'<div class="{css}">{figure_html}</div>'
+
+    first_plot = True
+
+    def plot(figure, full: bool = False) -> str:
+        nonlocal first_plot
+        html_fragment = pio.to_html(
+            figure,
             full_html=False,
-            include_plotlyjs=index == 0,
+            include_plotlyjs=first_plot,
             config={"responsive": True, "displaylogo": False},
         )
-        + "</figure>"
-        for index, (fig, _) in enumerate(figures)
-    )
+        first_plot = False
+        return card(html_fragment, full)
 
-    cards = [
-        ("Input + output tokens", f"{tokens:,}"),
-        ("Recorded cost (USD)", _fmt_cost(cost)),
-        ("Assistant messages", f"{calls:,}"),
-    ]
+    kpis = [("Input + output tokens", f"{tokens:,}", None),
+            ("Recorded cost (USD)", _fmt_cost(cost), "Reported by OpenCode, not an invoice"),
+            ("Assistant messages", f"{calls:,}", None)]
     if sessions is not None:
-        cards.append(("Sessions", f"{sessions:,}"))
-    cards.append(("Cache read tokens", f"{cache_read:,}"))
-    card_html = "".join(
-        f"<article><span>{label}</span><strong>{value}</strong></article>"
-        for label, value in cards
+        kpis.append(("Sessions", f"{sessions:,}", None))
+    kpis.append((
+        "Cache read tokens", f"{cache_read:,}",
+        "Independent counter, not part of the total above",
+    ))
+    kpi_html = "".join(
+        f'<div class="kpi"><div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        + (f'<div class="kpi-note">{note}</div>' if note else "")
+        + "</div>"
+        for label, value, note in kpis
     )
 
-    notes = []
-    hidden_models = data["model"].nunique() - len(by_model)
+    nav_html = "".join(
+        f'<a href="#{anchor}">{name}</a>' for anchor, name, _ in SECTIONS
+    )
+    sections_html = []
+    for anchor, name, desc in SECTIONS:
+        if anchor == "sec-overview":
+            body_html = (
+                f'<div class="kpi-row">{kpi_html}</div>'
+                f'<p class="scope-summary">{scope_summary}</p>'
+                f'<div class="grid">'
+                f"{plot(token_chart, full=True)}{plot(cost_chart, full=True)}"
+                f"{plot(project_chart, full=True)}{plot(model_chart, full=True)}"
+                "</div>"
+            )
+        else:
+            body_html = (
+                f'<div class="grid">'
+                f"{plot(composition_chart)}{plot(provider_chart)}"
+                "</div>"
+            )
+        sections_html.append(
+            f'<section class="section" id="{anchor}">'
+            f'<div class="section-head"><h2>{name}</h2></div>'
+            f'<p class="section-desc">{desc}</p>{body_html}</section>'
+        )
+
+    notes = [
+        "<p>Cache read is an independent counter reported separately from input "
+        "and output; it is not part of the input + output total above.</p>"
+    ]
     if hidden_models > 0:
         notes.append(
-            f"<p>Showing the top {len(by_model)} of "
-            f"{data['model'].nunique()} models ({model_shown:,} of "
-            f"{model_tokens:,} tokens, {model_shown / model_tokens:.1%}).</p>"
+            f"<p>The model ranking shows the top {len(by_model)} of "
+            f"{data['model'].nunique()} models, covering {model_shown:,} of "
+            f"{model_tokens:,} tokens ({model_shown / model_tokens:.1%}).</p>"
         )
-    notes.append(
-        "<p>Cache read is an independent counter and is reported separately from "
-        "input and output; it is not part of the input + output total above.</p>"
-    )
 
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>OpenCode Usage Dashboard</title>
-<style>
-body{{font-family:system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#17212b;line-height:1.4;font-variant-numeric:tabular-nums}}
-h1{{margin-bottom:.3rem}}.muted{{color:#536273}}.cards{{display:flex;flex-wrap:wrap;gap:1rem;margin:1.5rem 0}}
-article{{background:#f1f5f9;border-radius:8px;padding:1rem 1.4rem;min-width:150px}}
-article span{{display:block;color:#536273}}article strong{{font-size:1.5rem}}
-.chart{{margin:1.5rem 0}}.notes{{color:#536273;font-size:.9rem}}
-</style></head><body><h1>OpenCode Usage Dashboard</h1>
-<p class="muted">Recorded OpenCode usage. Cost is reported by OpenCode, not an invoice.</p>
-<section class="cards">{card_html}</section>
-{charts}
-<section class="notes">{"".join(notes)}</section>
+<style>{PAGE_CSS}</style></head><body>
+<div class="hero">
+<h1>OpenCode Usage Dashboard</h1>
+<p class="subtitle">{subtitle}</p>
+<nav class="nav-pills">{nav_html}</nav>
+</div>
+<div class="page">
+{"".join(sections_html)}
+<footer class="footer-note">{"".join(notes)}</footer>
+</div>
 </body></html>"""
     out_path.write_text(html, encoding="utf-8")
 
