@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import plotly.io as pio
 
 
@@ -30,6 +31,87 @@ CATEGORY_LABELS = {
     "reasoning_tokens": "Reasoning",
 }
 TOP_N = 10
+
+# Okabe-Ito, a colour-blind-safe categorical palette. Colour is chosen by what a
+# chart encodes, never by rank: one aggregate series gets blue, nominal
+# categories get fixed per-category hues, ordered levels get a Viridis ramp.
+OKABE_ITO = {
+    "black": "#000000",
+    "orange": "#e69f00",
+    "sky": "#56b4e9",
+    "green": "#009e73",
+    "yellow": "#f0e442",
+    "blue": "#0072b2",
+    "vermilion": "#d55e00",
+    "purple": "#cc79a7",
+}
+UNKNOWN_COLOR = "#8c959f"
+AGGREGATE_COLOR = OKABE_ITO["blue"]
+
+# Fixed hue per token category, keyed by meaning rather than by current size, so
+# "Input" stays blue whether or not cache read dwarfs it.
+CATEGORY_COLORS = {
+    "input_tokens": OKABE_ITO["blue"],
+    "output_tokens": OKABE_ITO["green"],
+    "cache_read_tokens": OKABE_ITO["sky"],
+    "cache_write_tokens": OKABE_ITO["orange"],
+    "reasoning_tokens": OKABE_ITO["purple"],
+}
+
+# Fallback hues for categorical series with no fixed colour of their own.
+CATEGORICAL_COLORS = [
+    OKABE_ITO["blue"], OKABE_ITO["vermilion"], OKABE_ITO["green"],
+    OKABE_ITO["sky"], OKABE_ITO["orange"], OKABE_ITO["purple"],
+    OKABE_ITO["yellow"], OKABE_ITO["black"],
+]
+
+TEMPLATE_NAME = "opencode"
+
+
+def provider_colors(providers) -> dict:
+    """Assign each provider a fixed hue, in alphabetical order.
+
+    Keying colour by name rather than by rank keeps a provider's colour stable
+    when the set of providers changes or the selection changes.
+    """
+    return {
+        name: CATEGORICAL_COLORS[index % len(CATEGORICAL_COLORS)]
+        for index, name in enumerate(sorted(providers))
+    }
+
+
+def plotly_template() -> str:
+    """Register the shared Plotly template and return its name.
+
+    Plotly's stock template paints a blue-grey plot area and cycles a bright
+    categorical palette; both are overridden here so charts sit on the same
+    white surface as the surrounding cards.
+    """
+    axis = dict(
+        showgrid=True, gridcolor="#e5e7eb", gridwidth=1, zeroline=False,
+        linecolor="#e5e7eb", ticks="outside", ticklen=4, tickcolor="#e5e7eb",
+        tickfont=dict(size=11, color="#59636e"),
+        title=dict(font=dict(size=12, color="#59636e")),
+        automargin=True,
+    )
+    pio.templates[TEMPLATE_NAME] = go.layout.Template(
+        layout=dict(
+            font=dict(family="Segoe UI, sans-serif", size=12, color="#374151"),
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            colorway=list(CATEGORICAL_COLORS),
+            title=dict(font=dict(size=15, color="#111827"), x=0.5, xanchor="center"),
+            xaxis=axis,
+            yaxis=axis,
+            legend=dict(
+                font=dict(size=11, color="#59636e"),
+                bgcolor="rgba(255,255,255,0)",
+            ),
+            hoverlabel=dict(bgcolor="#ffffff", font_size=12, font_family="Segoe UI, sans-serif"),
+            margin=dict(t=48, b=56, l=64, r=24),
+        )
+    )
+    return TEMPLATE_NAME
 
 # Page stylesheet. Kept as a plain string rather than an f-string so the CSS
 # braces do not need escaping, and so the design tokens live in one place.
@@ -230,40 +312,81 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         total_tokens=("total_tokens", "sum")
     ).sort_values("total_tokens", ascending=False)
 
+    template = plotly_template()
+
     token_chart = px.line(
-        daily, x="date", y="total_tokens", markers=True, title="Tokens by day"
+        daily, x="date", y="total_tokens", markers=True, title="Tokens by day",
+        template=template,
+        labels={"date": "Date", "total_tokens": "Input + output tokens"},
     )
     cost_chart = px.line(
-        daily, x="date", y="cost_usd", markers=True, title="Recorded cost by day"
+        daily, x="date", y="cost_usd", markers=True, title="Recorded cost by day",
+        template=template,
+        labels={"date": "Date", "cost_usd": "Recorded cost (USD)"},
     )
     composition_chart = px.bar(
         composition_main, x="label", y="tokens",
         labels={"label": "Token category", "tokens": "Tokens"},
         title="Token categories (input, output, reasoning)",
-        text="tokens",
+        text="tokens", template=template,
     )
     model_chart = px.bar(
         by_model, x="total_tokens", y="model", orientation="h",
         labels={"total_tokens": "Input + output tokens", "model": ""},
         title=f"Top {len(by_model)} models by tokens",
-        text="total_tokens",
+        text="total_tokens", template=template,
     )
     project_chart = px.bar(
         by_project, x="total_tokens", y="project", orientation="h",
         labels={"total_tokens": "Input + output tokens", "project": ""},
         title=f"Top {len(by_project)} projects by tokens",
-        text="total_tokens",
+        text="total_tokens", template=template,
     )
-    composition_chart.update_traces(
-        texttemplate="%{text:,}", textposition="outside", cliponaxis=False
-    )
-    for bar_chart in (model_chart, project_chart):
-        bar_chart.update_traces(
-            texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False
-        )
     provider_chart = px.pie(
         by_provider, names="provider", values="total_tokens", hole=0.45,
-        title="Tokens by provider",
+        title="Tokens by provider", template=template,
+        labels={"provider": "Provider", "total_tokens": "Tokens"},
+    )
+
+    # Aggregate charts carry a single series, so they share one blue.
+    for single_series in (token_chart, cost_chart):
+        single_series.update_traces(
+            line=dict(color=AGGREGATE_COLOR, width=2.5),
+            marker=dict(color=AGGREGATE_COLOR, size=6),
+            fill="tozeroy",
+            fillcolor="rgba(0, 114, 178, 0.10)",
+            hovertemplate="%{x}<br>%{y:,}<extra></extra>",
+        )
+    for ranking in (model_chart, project_chart):
+        ranking.update_traces(
+            marker=dict(color=AGGREGATE_COLOR),
+            texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False,
+            textfont=dict(color="#374151", size=11),
+            hovertemplate="%{y}<br>%{x:,} tokens<extra></extra>",
+        )
+    composition_chart.update_traces(
+        marker=dict(color=[
+            CATEGORY_COLORS.get(category, UNKNOWN_COLOR)
+            for category in composition_main["category"]
+        ]),
+        texttemplate="%{text:,}", textposition="outside", cliponaxis=False,
+        textfont=dict(color="#374151", size=11),
+        hovertemplate="%{x}<br>%{y:,} tokens<extra></extra>",
+    )
+    providers = provider_colors(by_provider["provider"])
+    provider_chart.update_traces(
+        marker=dict(
+            colors=[providers[name] for name in by_provider["provider"]],
+            line=dict(width=0),
+        ),
+        texttemplate="%{percent}<br>%{value:,.0f}",
+        hovertemplate="%{label}<br>%{value:,} tokens (%{percent})<extra></extra>",
+    )
+    provider_chart.update_layout(
+        legend=dict(
+            orientation="h", yanchor="top", y=-0.05, xanchor="center", x=0.5,
+            title=dict(text=""),
+        )
     )
     model_chart.update_layout(yaxis={"categoryorder": "total ascending"})
     project_chart.update_layout(yaxis={"categoryorder": "total ascending"})
@@ -294,13 +417,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         (provider_chart, 380),
     ]
     for fig, height in figures:
-        fig.update_layout(
-            height=height,
-            margin={"t": 48, "b": 56, "l": 64, "r": 24},
-            paper_bgcolor="#ffffff",
-            plot_bgcolor="#ffffff",
-            font={"family": "Segoe UI, sans-serif", "size": 12, "color": "#374151"},
-        )
+        fig.update_layout(height=height)
 
     def card(figure_html: str, full: bool = False) -> str:
         css = "card full" if full else "card"
