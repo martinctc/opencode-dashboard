@@ -32,6 +32,10 @@ CATEGORY_LABELS = {
 }
 TOP_N = 10
 
+# Donut slices below this share lose their in-place label: at small angles the
+# text overlaps its neighbours and is unreadable either way.
+MIN_LABEL_SHARE = 0.05
+
 # Okabe-Ito, a colour-blind-safe categorical palette. Colour is chosen by what a
 # chart encodes, never by rank: one aggregate series gets blue, nominal
 # categories get fixed per-category hues, ordered levels get a Viridis ramp.
@@ -280,6 +284,22 @@ def _fmt_cost(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def _label_peak(figure, frame: pd.DataFrame, value_column: str, unit: str) -> None:
+    """Annotate the largest point so the headline day is readable without hovering."""
+    if frame.empty:
+        return
+    peak = frame.loc[frame[value_column].idxmax()]
+    formatter = _fmt_cost if unit == "cost" else _fmt_tokens
+    figure.add_annotation(
+        x=peak["date"],
+        y=peak[value_column],
+        text=f"<b>{formatter(peak[value_column])}</b>",
+        showarrow=False,
+        yshift=16,
+        font=dict(size=11, color="#59636e"),
+    )
+
+
 def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     tokens = int(data["total_tokens"].sum())
     cost = float(data["cost_usd"].sum())
@@ -312,6 +332,13 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         total_tokens=("total_tokens", "sum")
     ).sort_values("total_tokens", ascending=False)
 
+    # Compact labels for the in-chart text; exact values stay available on hover.
+    by_model["label"] = [_fmt_tokens(value) for value in by_model["total_tokens"]]
+    by_project["label"] = [_fmt_tokens(value) for value in by_project["total_tokens"]]
+    composition_main["label_value"] = [
+        _fmt_tokens(value) for value in composition_main["tokens"]
+    ]
+
     template = plotly_template()
 
     token_chart = px.line(
@@ -325,22 +352,22 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         labels={"date": "Date", "cost_usd": "Recorded cost (USD)"},
     )
     composition_chart = px.bar(
-        composition_main, x="label", y="tokens",
+        composition_main, x="label", y="tokens", text="label_value",
         labels={"label": "Token category", "tokens": "Tokens"},
         title="Token categories (input, output, reasoning)",
-        text="tokens", template=template,
+        template=template,
     )
     model_chart = px.bar(
-        by_model, x="total_tokens", y="model", orientation="h",
+        by_model, x="total_tokens", y="model", orientation="h", text="label",
         labels={"total_tokens": "Input + output tokens", "model": ""},
         title=f"Top {len(by_model)} models by tokens",
-        text="total_tokens", template=template,
+        template=template,
     )
     project_chart = px.bar(
-        by_project, x="total_tokens", y="project", orientation="h",
+        by_project, x="total_tokens", y="project", orientation="h", text="label",
         labels={"total_tokens": "Input + output tokens", "project": ""},
         title=f"Top {len(by_project)} projects by tokens",
-        text="total_tokens", template=template,
+        template=template,
     )
     provider_chart = px.pie(
         by_provider, names="provider", values="total_tokens", hole=0.45,
@@ -360,7 +387,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     for ranking in (model_chart, project_chart):
         ranking.update_traces(
             marker=dict(color=AGGREGATE_COLOR),
-            texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False,
+            texttemplate="%{text}", textposition="outside", cliponaxis=False,
             textfont=dict(color="#374151", size=11),
             hovertemplate="%{y}<br>%{x:,} tokens<extra></extra>",
         )
@@ -369,17 +396,30 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
             CATEGORY_COLORS.get(category, UNKNOWN_COLOR)
             for category in composition_main["category"]
         ]),
-        texttemplate="%{text:,}", textposition="outside", cliponaxis=False,
+        texttemplate="%{text}", textposition="outside", cliponaxis=False,
         textfont=dict(color="#374151", size=11),
         hovertemplate="%{x}<br>%{y:,} tokens<extra></extra>",
     )
     providers = provider_colors(by_provider["provider"])
+    provider_total = by_provider["total_tokens"].sum()
+    # Slices below MIN_LABEL_SHARE collide with their neighbours and are
+    # unreadable, so they are left to the legend and hover instead.
     provider_chart.update_traces(
+        text=[
+            f"{share:.1%}<br>{_fmt_tokens(value)}"
+            if share >= MIN_LABEL_SHARE else ""
+            for share, value in zip(
+                by_provider["total_tokens"] / provider_total,
+                by_provider["total_tokens"],
+            )
+        ],
+        texttemplate="%{text}",
+        textposition="inside",
+        textfont=dict(color="#ffffff", size=11),
         marker=dict(
             colors=[providers[name] for name in by_provider["provider"]],
             line=dict(width=0),
         ),
-        texttemplate="%{percent}<br>%{value:,.0f}",
         hovertemplate="%{label}<br>%{value:,} tokens (%{percent})<extra></extra>",
     )
     provider_chart.update_layout(
@@ -390,6 +430,8 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     )
     model_chart.update_layout(yaxis={"categoryorder": "total ascending"})
     project_chart.update_layout(yaxis={"categoryorder": "total ascending"})
+    _label_peak(token_chart, daily, "total_tokens", "tokens")
+    _label_peak(cost_chart, daily, "cost_usd", "cost")
 
     # Dates arrive as datetime.date from load_data, but callers may pass raw strings.
     dates = sorted(pd.Timestamp(value).date() for value in data["date"].unique())
@@ -464,7 +506,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
                 f'<p class="scope-summary">{scope_summary}</p>'
                 f'<div class="grid">'
                 f"{plot(token_chart, full=True)}{plot(cost_chart, full=True)}"
-                f"{plot(project_chart, full=True)}{plot(model_chart, full=True)}"
+                f"{plot(project_chart)}{plot(model_chart)}"
                 "</div>"
             )
         else:
