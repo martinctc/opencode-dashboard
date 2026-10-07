@@ -3,6 +3,7 @@
 
 import argparse
 import glob
+import html
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+from plotly.offline import get_plotlyjs
 
 
 REQUIRED_COLUMNS = {
@@ -36,6 +38,37 @@ TOP_N = 10
 # text overlaps its neighbours and is unreadable either way.
 MIN_LABEL_SHARE = 0.05
 
+# A cost or efficiency ranking needs more than one qualifying model to be a
+# chart rather than a stray bar. Below these thresholds the section states what
+# it can actually prove instead.
+MIN_COST_MODELS = 2
+MIN_CALLS_FOR_EFFICIENCY = 5
+
+# Viridis samples for ordered levels: reasoning effort runs purple (low) to
+# yellow (high). Unrecorded effort is grey so it reads as a catch-all.
+EFFORT_COLORS = {
+    "none": "#440154",
+    "low": "#31688e",
+    "medium": "#35b779",
+    "high": "#fde725",
+}
+
+CATEGORY_EXPLAINERS = {
+    "Input": "Tokens sent to the model, including the prompt and any context "
+             "OpenCode attached. This is part of the headline total.",
+    "Output": "Tokens the model generated in reply. This is part of the "
+              "headline total.",
+    "Cache read": "Tokens OpenCode re-read from the provider's prompt cache "
+                  "instead of resending. Usually far larger than the headline "
+                  "total, because repeated turns re-send the same context. "
+                  "Cheap or free, but not part of input + output.",
+    "Cache write": "Tokens written into the prompt cache for later reuse. "
+                   "Zero when the provider does not report it.",
+    "Reasoning": "Tokens a reasoning model spent thinking before answering. "
+                 "Counted separately from output, so reasoning-heavy models "
+                 "look cheaper than they are.",
+}
+
 # Okabe-Ito, a colour-blind-safe categorical palette. Colour is chosen by what a
 # chart encodes, never by rank: one aggregate series gets blue, nominal
 # categories get fixed per-category hues, ordered levels get a Viridis ramp.
@@ -51,6 +84,8 @@ OKABE_ITO = {
 }
 UNKNOWN_COLOR = "#8c959f"
 AGGREGATE_COLOR = OKABE_ITO["blue"]
+# Unrecorded or unrecognised reasoning effort reads as grey, never as a ramp step.
+EFFORT_COLORS["n/a"] = UNKNOWN_COLOR
 
 # Fixed hue per token category, keyed by meaning rather than by current size, so
 # "Input" stays blue whether or not cache read dwarfs it.
@@ -183,6 +218,36 @@ body {
 }
 .card:hover { box-shadow: var(--shadow-hover); }
 .full { grid-column: 1 / -1; }
+.insight-bar { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; }
+.insight {
+  display: flex; gap: 10px; align-items: flex-start; font-size: 13px;
+  background: #eef4ff; border-left: 3px solid var(--accent);
+  border-radius: 6px; padding: 9px 12px; color: #1b3a7a;
+}
+.insight.warn { background: #fff8e6; border-left-color: var(--warn); color: #6b4d00; }
+.insight.good { background: #edf9f0; border-left-color: var(--good); color: #14532d; }
+.insight b { font-weight: 700; }
+.empty-state {
+  font-size: 13px; color: var(--muted); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+}
+.empty-state b { color: var(--text); font-weight: 650; }
+.glossary-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px; margin: 0 0 14px;
+}
+.glossary-item {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; margin: 0;
+}
+.glossary-item.highlight { background: #eef3ff; border-color: #c9dcff; }
+.glossary-item dt { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.glossary-item dd { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+details.explain { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+details.explain summary { cursor: pointer; font-size: 14px; font-weight: 650; color: var(--muted); }
+details.explain[open] summary { margin-bottom: 14px; }
+details.explain summary:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 3px; }
+.explain-note { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
 .footer-note {
   margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border);
   font-size: 12px; color: var(--muted);
@@ -208,9 +273,13 @@ SECTIONS = [
     ("sec-overview", "Overview",
      "Recorded OpenCode usage totals, the day they were used, and how they "
      "split across projects and models. Cost is reported by OpenCode, not an invoice."),
+    ("sec-cost", "Cost &amp; pricing efficiency",
+     "Where recorded cost concentrates, and which models return the most "
+     "tokens per dollar spent. Value here means pricing efficiency, not output "
+     "quality."),
     ("sec-composition", "Composition",
-     "Which token categories make up the recorded usage, and how it splits "
-     "across the providers that served it."),
+     "Which token categories make up the recorded usage, how it splits across "
+     "the providers that served it, and which reasoning effort was configured."),
 ]
 
 
@@ -284,6 +353,15 @@ def _fmt_cost(value: float) -> str:
     return f"${value:,.2f}"
 
 
+def _escape(value) -> str:
+    """Escape a value from the data before interpolating it into HTML.
+
+    Project and model names come from disk; without this a name containing
+    markup would be injected into the page.
+    """
+    return html.escape(str(value), quote=True)
+
+
 def _label_peak(figure, frame: pd.DataFrame, value_column: str, unit: str) -> None:
     """Annotate the largest point so the headline day is readable without hovering."""
     if frame.empty:
@@ -331,6 +409,39 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     by_provider = data.groupby("provider", as_index=False).agg(
         total_tokens=("total_tokens", "sum")
     ).sort_values("total_tokens", ascending=False)
+
+    # Cost is optional: providers only report it for billable models, so most
+    # rows can carry a genuine zero. Coverage is tracked separately from total.
+    by_model_cost = data.groupby("model", as_index=False).agg(
+        cost_usd=("cost_usd", "sum"),
+        total_tokens=("total_tokens", "sum"),
+        calls=("calls", "sum"),
+    )
+    costed = by_model_cost[by_model_cost["cost_usd"] > 0].sort_values(
+        "cost_usd", ascending=False
+    )
+    free_model_count = len(by_model_cost) - len(costed)
+    cost_rows = int((data["cost_usd"] > 0).sum())
+    cost_coverage = cost_rows / len(data) if len(data) else 0.0
+    costed["label"] = [_fmt_cost(value) for value in costed["cost_usd"]]
+    efficiency = costed[costed["calls"] >= MIN_CALLS_FOR_EFFICIENCY].copy()
+    efficiency["tokens_per_dollar"] = (
+        efficiency["total_tokens"] / efficiency["cost_usd"]
+    )
+    efficiency = efficiency.sort_values("tokens_per_dollar", ascending=False)
+    efficiency["label"] = [
+        f"{value:,.0f} tok/$" for value in efficiency["tokens_per_dollar"]
+    ]
+
+    # load_data() supplies `variant`; a caller passing a bare frame may not.
+    if "variant" in data:
+        effort = (
+            data.groupby("variant", as_index=False)
+            .agg(total_tokens=("total_tokens", "sum"), calls=("calls", "sum"))
+            .sort_values("total_tokens", ascending=False)
+        )
+    else:
+        effort = pd.DataFrame({"variant": [], "total_tokens": [], "calls": []})
 
     # Compact labels for the in-chart text; exact values stay available on hover.
     by_model["label"] = [_fmt_tokens(value) for value in by_model["total_tokens"]]
@@ -433,6 +544,51 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     _label_peak(token_chart, daily, "total_tokens", "tokens")
     _label_peak(cost_chart, daily, "cost_usd", "cost")
 
+    cost_chart_by_model = px.bar(
+        costed, x="cost_usd", y="model", orientation="h", text="label",
+        labels={"cost_usd": "Estimated cost (USD)", "model": ""},
+        title="Estimated cost by model", template=template,
+    )
+    cost_chart_by_model.update_traces(
+        marker=dict(color=AGGREGATE_COLOR),
+        texttemplate="%{text}", textposition="outside", cliponaxis=False,
+        textfont=dict(color="#374151", size=11),
+        hovertemplate="%{y}<br>$%{x:,.4f}<extra></extra>",
+    )
+    cost_chart_by_model.update_layout(yaxis={"categoryorder": "total ascending"})
+
+    efficiency_chart = px.bar(
+        efficiency, x="tokens_per_dollar", y="model", orientation="h",
+        text="label",
+        labels={
+            "tokens_per_dollar": "Tokens per estimated USD (confirmed calls)",
+            "model": "",
+        },
+        title=f"Pricing efficiency by model ({MIN_CALLS_FOR_EFFICIENCY}+ calls)",
+        template=template,
+    )
+    efficiency_chart.update_traces(
+        marker=dict(color=AGGREGATE_COLOR),
+        texttemplate="%{text}", textposition="outside", cliponaxis=False,
+        textfont=dict(color="#374151", size=11),
+        hovertemplate="%{y}<br>%{x:,.0f} tokens per $<extra></extra>",
+    )
+    efficiency_chart.update_layout(yaxis={"categoryorder": "total ascending"})
+
+    effort_chart = px.bar(
+        effort, x="variant", y="total_tokens", text="total_tokens",
+        labels={"variant": "Configured reasoning effort", "total_tokens": "Input + output tokens"},
+        title="Tokens by reasoning effort", template=template,
+    )
+    effort_chart.update_traces(
+        marker=dict(color=[
+            EFFORT_COLORS.get(str(value), UNKNOWN_COLOR) for value in effort["variant"]
+        ]),
+        texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False,
+        textfont=dict(color="#374151", size=11),
+        hovertemplate="%{x}<br>%{y:,} tokens<extra></extra>",
+    )
+
     # Dates arrive as datetime.date from load_data, but callers may pass raw strings.
     dates = sorted(pd.Timestamp(value).date() for value in data["date"].unique())
     latest = dates[-1].isoformat()
@@ -465,18 +621,18 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         css = "card full" if full else "card"
         return f'<div class="{css}">{figure_html}</div>'
 
-    first_plot = True
-
     def plot(figure, full: bool = False) -> str:
-        nonlocal first_plot
-        html_fragment = pio.to_html(
-            figure,
-            full_html=False,
-            include_plotlyjs=first_plot,
-            config={"responsive": True, "displaylogo": False},
+        # plotly.js is emitted once in the head, so no figure is responsible for
+        # carrying it. That keeps rendering independent of section order.
+        return card(
+            pio.to_html(
+                figure,
+                full_html=False,
+                include_plotlyjs=False,
+                config={"responsive": True, "displaylogo": False},
+            ),
+            full,
         )
-        first_plot = False
-        return card(html_fragment, full)
 
     kpis = [("Input + output tokens", f"{tokens:,}", None),
             ("Recorded cost (USD)", _fmt_cost(cost), "Reported by OpenCode, not an invoice"),
@@ -498,27 +654,131 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     nav_html = "".join(
         f'<a href="#{anchor}">{name}</a>' for anchor, name, _ in SECTIONS
     )
+
+    # Observations are derived from the data rather than written by hand, so
+    # they stay true as the exports change.
+    insights = []
+    if not by_project.empty and model_tokens:
+        lead_project = by_project.iloc[0]
+        project_share = lead_project["total_tokens"] / model_tokens
+        insights.append((
+            "info",
+            f"<b>{_escape(lead_project['project'])}</b> accounts for "
+            f"<b>{project_share:.0%}</b> of recorded tokens.",
+        ))
+    if not by_model.empty and model_tokens:
+        lead_model = by_model.iloc[0]
+        insights.append((
+            "info",
+            f"Leading model: <b>{_escape(lead_model['model'])}</b> at "
+            f"<b>{lead_model['total_tokens'] / model_tokens:.0%}</b> of tokens.",
+        ))
+    if cache_read and tokens:
+        ratio = cache_read / tokens
+        if ratio >= 1:
+            insights.append((
+                "info",
+                f"Cache reads are <b>{ratio:.0f}x</b> the input + output total. "
+                "Most work is re-reading context, not generating it.",
+            ))
+    if cost_coverage < 1:
+        insights.append((
+            "warn" if cost_coverage == 0 else "info",
+            f"Cost was recorded for <b>{cost_rows} of {len(data)}</b> exported "
+            f"rows ({cost_coverage:.1%}). Providers only report cost for "
+            f"billable models; <b>{free_model_count}</b> of "
+            f"{len(by_model_cost)} models recorded none.",
+        ))
+
+    def insight_bar(items) -> str:
+        if not items:
+            return ""
+        rows = "".join(
+            f'<div class="insight {kind}"><div>{text}</div></div>'
+            for kind, text in items
+        )
+        return f'<div class="insight-bar">{rows}</div>'
+
+    def empty_state(message: str) -> str:
+        return f'<div class="card"><div class="empty-state">{message}</div></div>'
+
+    def glossary_html() -> str:
+        items = "".join(
+            f'<dl class="glossary-item'
+            f'{" highlight" if name == "Cache read" else ""}">'
+            f"<dt>{name}</dt><dd>{body}</dd></dl>"
+            for name, body in CATEGORY_EXPLAINERS.items()
+        )
+        return (
+            '<details class="explain"><summary>What do these token '
+            f'categories mean?</summary><div class="glossary-grid">{items}</div>'
+            "<p class=\"explain-note\">"
+            "Cache read and reasoning are tracked as independent counters, so "
+            "they are not part of the input + output headline.</p></details>"
+        )
+
+    if len(costed) >= MIN_COST_MODELS:
+        cost_body = f'<div class="grid">{plot(cost_chart_by_model, full=True)}'
+        if not efficiency.empty:
+            cost_body += plot(efficiency_chart)
+        cost_body += "</div>"
+    else:
+        cost_body = (
+            '<div class="grid">'
+            + empty_state(
+                f"<b>Not enough priced usage to rank yet.</b> Cost was recorded "
+                f"for <b>{len(costed)} of {len(by_model_cost)}</b> models "
+                f"({cost_rows} of {len(data)} rows, {cost_coverage:.1%} coverage). "
+                f"The remaining {free_model_count} models recorded no cost, which "
+                "usually means a free tier or an unreported provider. Both "
+                "charts appear here once at least "
+                f"{MIN_COST_MODELS} models carry cost."
+            )
+            + "</div>"
+        )
+
+    # A single non-default variant is not a comparison. Only render the chart
+    # once at least two variants actually carry tokens.
+    if int((effort["total_tokens"] > 0).sum()) >= 2:
+        effort_body = f'<div class="grid">{plot(effort_chart)}</div>'
+    else:
+        effort_body = (
+            '<div class="grid full">'
+            + empty_state(
+                "<b>No reasoning effort to compare.</b> Every message in this "
+                "export used the provider default, so there is nothing to rank. "
+                "The chart appears once two or more effort levels are recorded."
+            )
+            + "</div>"
+        )
+
+    section_bodies = {
+        "sec-overview": (
+            f'<div class="kpi-row">{kpi_html}</div>'
+            f'<p class="scope-summary">{scope_summary}</p>'
+            f"{insight_bar(insights)}"
+            f'<div class="grid">'
+            f"{plot(token_chart, full=True)}{plot(cost_chart, full=True)}"
+            f"{plot(project_chart)}{plot(model_chart)}"
+            "</div>"
+        ),
+        "sec-cost": cost_body,
+        "sec-composition": (
+            f'<div class="grid">'
+            f"{plot(composition_chart)}{plot(provider_chart)}"
+            "</div>"
+            f"{effort_body}"
+            f'{glossary_html()}'
+        ),
+    }
+
     sections_html = []
     for anchor, name, desc in SECTIONS:
-        if anchor == "sec-overview":
-            body_html = (
-                f'<div class="kpi-row">{kpi_html}</div>'
-                f'<p class="scope-summary">{scope_summary}</p>'
-                f'<div class="grid">'
-                f"{plot(token_chart, full=True)}{plot(cost_chart, full=True)}"
-                f"{plot(project_chart)}{plot(model_chart)}"
-                "</div>"
-            )
-        else:
-            body_html = (
-                f'<div class="grid">'
-                f"{plot(composition_chart)}{plot(provider_chart)}"
-                "</div>"
-            )
         sections_html.append(
             f'<section class="section" id="{anchor}">'
             f'<div class="section-head"><h2>{name}</h2></div>'
-            f'<p class="section-desc">{desc}</p>{body_html}</section>'
+            f'<p class="section-desc">{desc}</p>'
+            f"{section_bodies[anchor]}</section>"
         )
 
     notes = [
@@ -535,7 +795,8 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>OpenCode Usage Dashboard</title>
-<style>{PAGE_CSS}</style></head><body>
+<style>{PAGE_CSS}</style>
+<script>{get_plotlyjs()}</script></head><body>
 <div class="hero">
 <h1>OpenCode Usage Dashboard</h1>
 <p class="subtitle">{subtitle}</p>
