@@ -37,7 +37,10 @@ def capture(html: Path, out_dir: Path, suffix: str, width: int) -> list:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={"width": width, "height": 1000})
         page.goto(html.resolve().as_uri())
-        page.wait_for_selector(".plotly-graph-div .main-svg", timeout=30_000)
+        # plotly.js v3 (plotly 6.x) tags charts with js-plotly-plot and no
+        # longer adds plotly-graph-div, so wait on the drawn SVG inside our own
+        # slot rather than on a class Plotly may drop between versions.
+        page.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
         page.wait_for_timeout(1500)
 
         target = out_dir / f"dashboard-{suffix}.png"

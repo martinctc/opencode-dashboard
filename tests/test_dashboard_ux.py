@@ -63,6 +63,44 @@ def _write_csv(path: Path, rows, fields) -> None:
 
 
 @pytest.fixture(scope="session")
+def sparse_html(tmp_path_factory) -> Path:
+    """A dashboard shaped like a real free-tier export.
+
+    One priced model out of three, and no reasoning effort recorded. The gates
+    must close here: a single priced model is a stray bar, not a ranking.
+    """
+    models = [
+        ("opencode/free-model-a", "opencode", 0.0),
+        ("openrouter/paid/model-b", "openrouter", 3.0),
+        ("azure/free-model-c", "azure", 0.0),
+    ]
+    rows = []
+    for offset, day in enumerate(("2026-10-05", "2026-10-06")):
+        for index, (model, gateway, unit_cost) in enumerate(models):
+            calls = 5 + offset + index
+            total = 100_000 * (index + 1) * (offset + 1)
+            rows.append({
+                "source": "OpenCode", "user": "u", "date": day,
+                "project": f"proj-{index % 2}", "provider": gateway,
+                "model": model, "variant": "n/a", "calls": calls,
+                "input_tokens": int(total * 0.9),
+                "output_tokens": int(total * 0.1),
+                "cache_read_tokens": total * 10, "cache_write_tokens": 0,
+                "reasoning_tokens": 0, "total_tokens": total,
+                "cost_usd": round(total / 1_000_000 * unit_cost, 6),
+                "session_id": f"s-{model}-{day}",
+                "export_format_version": "1",
+                "exported_at": "2026-10-06T10:00:00+00:00",
+            })
+    fields = list(rows[0])
+    csv_path = tmp_path_factory.mktemp("sparse") / "sparse.csv"
+    html_path = tmp_path_factory.mktemp("sparse") / "sparse_dashboard.html"
+    _write_csv(csv_path, rows, fields)
+    build_dashboard(load_data(str(csv_path)), html_path)
+    return html_path
+
+
+@pytest.fixture(scope="session")
 def browser():
     with sync_playwright() as driver:
         try:
@@ -161,6 +199,44 @@ def test_insight_bars_are_rendered(page):
     insights = page.eval_on_selector_all(".insight", "els => els.map(e => e.textContent)")
     assert insights
     assert any("Cache read" in text for text in insights)
+
+
+@pytest.fixture
+def sparse_page(browser, sparse_html):
+    context = browser.new_context(viewport={"width": 1280, "height": 900})
+    handle = context.new_page()
+    handle.goto(sparse_html.resolve().as_uri())
+    handle.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
+    yield handle
+    context.close()
+
+
+def test_insufficient_data_closes_cost_and_effort_gates(sparse_page):
+    """A single priced model must not be charted as a ranking.
+
+    The companion to the gate-open test: without this, a gate that is never
+    applied looks correct on a rich export and quietly regresses on a sparse one.
+    """
+    text = sparse_page.inner_text("body")
+    assert "Not enough priced usage to rank yet" in text
+    assert "No reasoning effort to compare" in text
+    assert "Estimated cost by model" not in text
+    assert "Pricing efficiency by model" not in text
+    assert "Tokens by reasoning effort" not in text
+
+
+def test_gated_cards_are_hidden_not_blank(sparse_page):
+    """A gated chart must be hidden, and its explanation shown once."""
+    for chart_id in ("cost-by-model", "efficiency", "effort"):
+        assert not sparse_page.is_visible(f'[data-slot="{chart_id}"]')
+    assert sparse_page.is_visible('[data-slot="cost-notice"]')
+    assert sparse_page.is_visible('[data-slot="effort-notice"]')
+
+    cost_message = sparse_page.inner_text('[data-slot="cost-notice"]')
+    body = sparse_page.inner_text("body")
+    assert body.count("Not enough priced usage to rank yet") == 1
+    assert body.count("No reasoning effort to compare") == 1
+    assert "1 of 3 models" in cost_message
 
 
 def test_page_loads_without_external_requests(browser, sample_html):

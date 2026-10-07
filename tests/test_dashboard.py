@@ -3,7 +3,7 @@ import re
 import pandas as pd
 import pytest
 
-from dashboard import build_dashboard, load_data
+from dashboard import build_dashboard, load_data, main
 
 
 def sample_data():
@@ -36,6 +36,29 @@ def test_build_dashboard_writes_offline_html(tmp_path):
     # Token categories are labelled for display rather than by raw column name.
     assert "Input" in html and "Output" in html
     assert not re.search(r'<script[^>]+src=["\']https://cdn\.plot\.ly', html)
+
+
+def test_cli_writes_a_dashboard(tmp_path, capsys):
+    """The command line entry point must actually produce a file.
+
+    The other tests call build_dashboard() directly, so a regression that only
+    breaks the CLI - a missing main(), an unimported name - would pass the whole
+    suite while `python dashboard.py` silently did nothing.
+    """
+    source = sample_data()
+    source["variant"] = "n/a"
+    source["exported_at"] = "2026-10-06T10:00:00+00:00"
+    csv_path = tmp_path / "usage.csv"
+    source.to_csv(csv_path, index=False)
+    output = tmp_path / "out.html"
+
+    result = main(["--in", str(csv_path), "--out", str(output)])
+
+    assert result == 0
+    assert output.exists()
+    assert output.stat().st_size > 0
+    assert str(output) in capsys.readouterr().out
+    assert "OpenCode Usage Dashboard" in output.read_text(encoding="utf-8")
 
 
 def test_load_data_requires_usage_columns(tmp_path):

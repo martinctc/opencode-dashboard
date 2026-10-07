@@ -4,6 +4,7 @@
 import argparse
 import glob
 import html
+import json
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.offline import get_plotlyjs
+from plotly.utils import PlotlyJSONEncoder
 
 
 REQUIRED_COLUMNS = {
@@ -252,6 +254,8 @@ details.explain summary { cursor: pointer; font-size: 14px; font-weight: 650; co
 details.explain[open] summary { margin-bottom: 14px; }
 details.explain summary:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 3px; }
 .explain-note { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+.plot-slot { min-height: 1px; }
+[hidden] { display: none !important; }
 .footer-note {
   margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border);
   font-size: 12px; color: var(--muted);
@@ -366,475 +370,691 @@ def _escape(value) -> str:
     return html.escape(str(value), quote=True)
 
 
-def _pad_axis_for_labels(
-    figure, axis: str, maximum: float, fraction: float = LABEL_HEADROOM
-) -> None:
-    """Reserve headroom on a value axis so outside bar labels are not clipped.
+def _json_for_script(value) -> str:
+    """Serialise a value for embedding inside a <script> element.
 
-    Plotly does not account for `textposition="outside"` when scaling an axis, so
-    the label on the longest bar runs past the plot area and is cut off by the
-    card edge.
+    A `</script>` sequence inside a JSON string would close the tag early and
+    `<!--` can start an HTML comment, so angle brackets and ampersands are
+    emitted as escapes that JSON.parse still reads back unchanged.
+
+    PlotlyJSONEncoder is used rather than the stock encoder because the shared
+    template contains numpy scalars, which would otherwise serialise as strings.
     """
-    if not maximum or maximum <= 0:
-        return
-    figure.update_layout(**{axis: {"range": [0, maximum * (1 + fraction)]}})
+    return (
+        json.dumps(value, cls=PlotlyJSONEncoder, separators=(",", ":"))
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 
-def _label_peak(figure, frame: pd.DataFrame, value_column: str, unit: str) -> None:
-    """Annotate the largest point so the headline day is readable without hovering."""
-    if frame.empty:
-        return
-    peak = frame.loc[frame[value_column].idxmax()]
-    formatter = _fmt_cost if unit == "cost" else _fmt_tokens
-    figure.add_annotation(
-        x=peak["date"],
-        y=peak[value_column],
-        text=f"<b>{formatter(peak[value_column])}</b>",
-        showarrow=False,
-        yshift=16,
-        font=dict(size=11, color="#59636e"),
+# The client render layer. Charts are built here rather than in Python so that
+# filters and date ranges can re-slice the embedded rows and re-render, without
+# a round trip or a rebuild. Kept as a plain string so JS braces do not need
+# escaping; the page shell injects the data it needs via window.__DASHBOARD__.
+CLIENT_JS = r"""
+(function () {
+  "use strict";
+
+  var D = window.__DASHBOARD__;
+  var CFG = D.config;
+  var BASE = CFG.template.layout;
+  var SUM_FIELDS = ["total_tokens", "cost_usd", "calls", "input_tokens",
+                    "output_tokens", "cache_read_tokens", "cache_write_tokens",
+                    "reasoning_tokens"];
+
+  // Phase 5c filters mutate this. Until then it is simply every row.
+  var state = { rows: D.rows };
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(value) {
+    return String(value).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;",
+               '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function group(n) {
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
+  function fmtTokens(value) {
+    var v = Math.abs(value);
+    if (v >= 1e9) { return (value / 1e9).toFixed(1) + "B"; }
+    if (v >= 1e6) { return (value / 1e6).toFixed(1) + "M"; }
+    if (v >= 1e3) { return (value / 1e3).toFixed(1) + "K"; }
+    return group(Math.round(value));
+  }
+
+  function fmtCost(value) {
+    if (value === 0) { return "$0.00"; }
+    if (Math.abs(value) < 0.01) { return "$" + value.toFixed(4); }
+    return "$" + value.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
+  function fmtCostBar(value) {
+    if (value === 0) { return "$0.00"; }
+    if (Math.abs(value) < 0.01) { return "$" + value.toFixed(4); }
+    return "$" + value.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
+  function bump(map, key, row) {
+    var entry = map.get(key);
+    if (!entry) {
+      entry = { key: key };
+      for (var i = 0; i < SUM_FIELDS.length; i++) { entry[SUM_FIELDS[i]] = 0; }
+      map.set(key, entry);
+    }
+    for (var j = 0; j < SUM_FIELDS.length; j++) {
+      entry[SUM_FIELDS[j]] += Number(row[SUM_FIELDS[j]]) || 0;
+    }
+    return entry;
+  }
+
+  function byTokensDesc(map) {
+    return Array.from(map.values()).sort(function (a, b) {
+      return b.total_tokens - a.total_tokens;
+    });
+  }
+
+  function axis(base, extra) {
+    var merged = {};
+    var source = BASE[base] || {};
+    for (var k in source) { if (Object.prototype.hasOwnProperty.call(source, k)) { merged[k] = source[k]; } }
+    for (var j in extra) { if (Object.prototype.hasOwnProperty.call(extra, j)) { merged[j] = extra[j]; } }
+    return merged;
+  }
+
+  function layout(extra, height) {
+    var out = {};
+    for (var k in BASE) { if (Object.prototype.hasOwnProperty.call(BASE, k)) { out[k] = BASE[k]; } }
+    out.height = height;
+    return Object.assign(out, extra || {});
+  }
+
+  // Plotly does not reserve room for textposition="outside" when scaling an
+  // axis, so the label on the longest bar would run past the card edge.
+  function paddedRange(maximum) {
+    if (!maximum || maximum <= 0) { return undefined; }
+    return [0, maximum * (1 + CFG.labelHeadroom)];
+  }
+
+  function maxOf(entries, field) {
+    var best = 0;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i][field] > best) { best = entries[i][field]; }
+    }
+    return best;
+  }
+
+  function subtitleHtml(d) {
+    var through = d.daily.length
+      ? d.daily[d.daily.length - 1].key : "no dated usage";
+    return "Data through " + through + " &middot; generated " +
+      CFG.generatedAt + " &middot; local session-store exports";
+  }
+
+  function aggregate(rows) {
+    var totals = { tokens: 0, cost: 0, calls: 0, cacheRead: 0 };
+    var categories = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0,
+                       cache_write_tokens: 0, reasoning_tokens: 0 };
+    var daily = new Map(), models = new Map(), projects = new Map(),
+        providers = new Map(), efforts = new Map();
+    var sessions = new Set();
+    var costRows = 0;
+
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      totals.tokens += r.total_tokens;
+      totals.cost += r.cost_usd;
+      totals.calls += r.calls;
+      totals.cacheRead += r.cache_read_tokens;
+      if (r.cost_usd > 0) { costRows += 1; }
+      sessions.add(r.session_id);
+      for (var k in categories) { categories[k] += r[k] || 0; }
+      bump(daily, r.date, r);
+      bump(models, r.model, r);
+      bump(projects, r.project, r);
+      bump(providers, r.provider, r);
+      bump(efforts, r.variant || "n/a", r);
+    }
+
+    var allModels = byTokensDesc(models);
+    var costed = modelsBy(costRows, models);
+
+    return {
+      rows: rows,
+      totals: totals,
+      categories: categories,
+      sessions: sessions.size,
+      costRows: costRows,
+      daily: Array.from(daily.values()).sort(function (a, b) {
+        return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0);
+      }),
+      models: allModels,
+      modelCount: allModels.length,
+      projects: byTokensDesc(projects),
+      projectCount: projects.size,
+      providers: byTokensDesc(providers),
+      costed: costed,
+      freeModelCount: allModels.length - costed.length,
+      efforts: byTokensDesc(efforts)
+    };
+  }
+
+  function modelsBy(_costRows, models) {
+    var out = [];
+    models.forEach(function (entry) {
+      if (entry.cost_usd > 0) { out.push(entry); }
+    });
+    return out.sort(function (a, b) { return b.cost_usd - a.cost_usd; });
+  }
+
+  function providerColors(providers) {
+    var names = providers.map(function (p) { return p.key; }).sort();
+    var colors = {};
+    names.forEach(function (name, index) {
+      colors[name] = CFG.categoricalColors[index % CFG.categoricalColors.length];
+    });
+    return colors;
+  }
+
+  function kpiHtml(d) {
+    var items = [
+      ["Input + output tokens", group(d.totals.tokens), null],
+      ["Recorded cost (USD)", fmtCost(d.totals.cost),
+       "Reported by OpenCode, not an invoice"],
+      ["Assistant messages", group(d.totals.calls), null],
+      ["Sessions", group(d.sessions), null],
+      ["Cache read tokens", group(d.totals.cacheRead),
+       "Independent counter, not part of the total above"]
+    ];
+    return items.map(function (item) {
+      return '<div class="kpi"><div class="kpi-label">' + esc(item[0]) +
+        '</div><div class="kpi-value">' + esc(item[1]) + "</div>" +
+        (item[2] ? '<div class="kpi-note">' + esc(item[2]) + "</div>" : "") +
+        "</div>";
+    }).join("");
+  }
+
+  function insightHtml(d) {
+    var out = [];
+    if (d.projects.length && d.totals.tokens) {
+      var lead = d.projects[0];
+      out.push(["info", "<b>" + esc(lead.key) + "</b> accounts for <b>" +
+        (lead.total_tokens / d.totals.tokens * 100).toFixed(0) +
+        "%</b> of recorded tokens."]);
+    }
+    if (d.models.length && d.totals.tokens) {
+      var lm = d.models[0];
+      out.push(["info", "Leading model: <b>" + esc(lm.key) + "</b> at <b>" +
+        (lm.total_tokens / d.totals.tokens * 100).toFixed(0) +
+        "%</b> of tokens."]);
+    }
+    if (d.totals.cacheRead && d.totals.tokens) {
+      var ratio = d.totals.cacheRead / d.totals.tokens;
+      if (ratio >= 1) {
+        out.push(["info", "Cache reads are <b>" + ratio.toFixed(0) +
+          "x</b> the input + output total. Most work is re-reading context, " +
+          "not generating it."]);
+      }
+    }
+    if (d.rows.length && d.costRows < d.rows.length) {
+      out.push([d.costRows === 0 ? "warn" : "info",
+        "Cost was recorded for <b>" + group(d.costRows) + " of " +
+        group(d.rows.length) + "</b> exported rows (" +
+        (d.costRows / d.rows.length * 100).toFixed(1) +
+        "%). Providers only report cost for billable models; <b>" +
+        d.freeModelCount + "</b> of " + d.modelCount + " models recorded none."]);
+    }
+    return out.map(function (item) {
+      return '<div class="insight ' + item[0] + '"><div>' + item[1] + "</div></div>";
+    }).join("");
+  }
+
+  function scopeHtml(d) {
+    var dates = d.daily.map(function (row) { return row.key; });
+    if (!dates.length) { return "No dated usage available"; }
+    var span = dates.length > 1 ? dates[0] + " to " + dates[dates.length - 1] : dates[0];
+    var users = CFG.userCount;
+    return span + " &middot; " + d.projectCount + " projects &middot; " +
+      d.modelCount + " models &middot; " + users + " user" + (users === 1 ? "" : "s");
+  }
+
+  function trendSpec(entries, field, unit) {
+    if (!entries.length) { return null; }
+    var maxEntry = entries[0];
+    for (var i = 1; i < entries.length; i++) {
+      if (entries[i][field] > maxEntry[field]) { maxEntry = entries[i]; }
+    }
+    return {
+      traces: [{
+        type: "scatter", mode: "lines+markers",
+        x: entries.map(function (e) { return e.key; }),
+        y: entries.map(function (e) { return e[field]; }),
+        line: { color: CFG.aggregateColor, width: 2.5 },
+        marker: { color: CFG.aggregateColor, size: 6 },
+        fill: "tozeroy", fillcolor: "rgba(0, 114, 178, 0.10)",
+        hovertemplate: "%{x}<br>%{y:,}<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: unit === "cost" ? "Recorded cost by day" : "Tokens by day" },
+        xaxis: axis("xaxis", { type: "date" }),
+        yaxis: axis("yaxis", { title: { text: unit === "cost"
+          ? "Recorded cost (USD)" : "Input + output tokens" } }),
+        annotations: [{
+          x: maxEntry.key, y: maxEntry[field],
+          text: "<b>" + (unit === "cost" ? fmtCost(maxEntry[field])
+                                        : fmtTokens(maxEntry[field])) + "</b>",
+          showarrow: false, yshift: 16,
+          font: { size: 11, color: "#59636e" }
+        }]
+      }, 380)
+    };
+  }
+
+  function compositionSpec(d) {
+    var keep = ["input_tokens", "output_tokens", "cache_write_tokens",
+                "reasoning_tokens"];
+    var labels = [], values = [], colors = [], best = 0;
+    for (var i = 0; i < keep.length; i++) {
+      labels.push(CFG.categoryLabels[keep[i]]);
+      values.push(d.categories[keep[i]]);
+      colors.push(CFG.categoryColors[keep[i]]);
+      if (d.categories[keep[i]] > best) { best = d.categories[keep[i]]; }
+    }
+    return {
+      traces: [{
+        type: "bar", x: labels, y: values,
+        text: values.map(function (v) { return group(v); }),
+        texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
+        textfont: { color: "#374151", size: 11 },
+        marker: { color: colors },
+        hovertemplate: "%{x}<br>%{y:,} tokens<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: "Token categories (input, output, reasoning)" },
+        xaxis: axis("xaxis", { title: { text: "Token category" } }),
+        yaxis: axis("yaxis", { title: { text: "Tokens" }, range: paddedRange(best) })
+      }, 340)
+    };
+  }
+
+  function rankingSpec(entries, title, noun) {
+    var n = Math.min(entries.length, CFG.topN);
+    var slice = entries.slice(0, n);
+    if (!slice.length) { return null; }
+    var values = slice.map(function (e) { return e.total_tokens; });
+    return {
+      traces: [{
+        type: "bar", orientation: "h",
+        x: values, y: slice.map(function (e) { return e.key; }),
+        text: values.map(function (v) { return fmtTokens(v); }),
+        texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
+        textfont: { color: "#374151", size: 11 },
+        marker: { color: CFG.aggregateColor },
+        hovertemplate: "%{y}<br>%{x:,} tokens<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: title },
+        xaxis: axis("xaxis", { title: { text: "Input + output tokens" },
+                                range: paddedRange(Math.max.apply(null, values)) }),
+        yaxis: axis("yaxis", { categoryorder: "total ascending",
+                               title: { text: noun } })
+      }, Math.max(260, 34 * n + 120))
+    };
+  }
+
+  function providerSpec(d) {
+    if (!d.providers.length) { return null; }
+    var colors = providerColors(d.providers);
+    var total = d.providers.reduce(function (acc, p) { return acc + p.total_tokens; }, 0);
+    var texts = d.providers.map(function (p) {
+      var share = total ? p.total_tokens / total : 0;
+      return share >= CFG.minLabelShare
+        ? (share * 100).toFixed(1) + "%<br>" + fmtTokens(p.total_tokens) : "";
+    });
+    return {
+      traces: [{
+        type: "pie", hole: 0.45,
+        labels: d.providers.map(function (p) { return p.key; }),
+        values: d.providers.map(function (p) { return p.total_tokens; }),
+        text: texts, texttemplate: "%{text}", textposition: "inside",
+        textfont: { color: "#ffffff", size: 11 },
+        marker: { colors: d.providers.map(function (p) { return colors[p.key]; }),
+                  line: { width: 0 } },
+        hovertemplate: "%{label}<br>%{value:,} tokens (%{percent})<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: "Tokens by provider" },
+        legend: Object.assign({}, BASE.legend || {}, {
+          orientation: "h", yanchor: "top", y: -0.05,
+          xanchor: "center", x: 0.5, title: { text: "" }
+        })
+      }, 380)
+    };
+  }
+
+  function costByModelSpec(d) {
+    if (!d.costed.length) { return null; }
+    var values = d.costed.map(function (m) { return m.cost_usd; });
+    return {
+      traces: [{
+        type: "bar", orientation: "h",
+        x: values, y: d.costed.map(function (m) { return m.key; }),
+        text: values.map(function (v) { return fmtCostBar(v); }),
+        texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
+        textfont: { color: "#374151", size: 11 },
+        marker: { color: CFG.aggregateColor },
+        hovertemplate: "%{y}<br>$%{x:,.4f}<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: "Estimated cost by model" },
+        xaxis: axis("xaxis", { title: { text: "Estimated cost (USD)" },
+                                range: paddedRange(Math.max.apply(null, values)) }),
+        yaxis: axis("yaxis", { categoryorder: "total ascending",
+                               title: { text: "" } })
+      }, Math.max(260, 34 * d.costed.length + 120))
+    };
+  }
+
+  function efficiencySpec(d) {
+    var rows = d.costed.filter(function (m) { return m.calls >= CFG.minCallsForEfficiency; });
+    rows = rows.map(function (m) {
+      return { key: m.key, value: m.total_tokens / m.cost_usd };
+    }).sort(function (a, b) { return b.value - a.value; });
+    if (!rows.length) { return null; }
+    var values = rows.map(function (r) { return r.value; });
+    return {
+      traces: [{
+        type: "bar", orientation: "h",
+        x: values, y: rows.map(function (r) { return r.key; }),
+        text: values.map(function (v) { return group(Math.round(v)) + " tok/$"; }),
+        texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
+        textfont: { color: "#374151", size: 11 },
+        marker: { color: CFG.aggregateColor },
+        hovertemplate: "%{y}<br>%{x:,.0f} tokens per $<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: "Pricing efficiency by model (" +
+                       CFG.minCallsForEfficiency + "+ calls)" },
+        xaxis: axis("xaxis", {
+          title: { text: "Tokens per estimated USD (confirmed calls)" },
+          range: paddedRange(Math.max.apply(null, values)) }),
+        yaxis: axis("yaxis", { categoryorder: "total ascending",
+                               title: { text: "" } })
+      }, Math.max(260, 34 * rows.length + 120))
+    };
+  }
+
+  function effortSpec(d) {
+    if (d.efforts.length < 2) { return null; }
+    var withTokens = d.efforts.filter(function (e) { return e.total_tokens > 0; });
+    if (withTokens.length < 2) { return null; }
+    var values = d.efforts.map(function (e) { return e.total_tokens; });
+    return {
+      traces: [{
+        type: "bar",
+        x: d.efforts.map(function (e) { return e.key; }), y: values,
+        text: values.map(function (v) { return group(v); }),
+        texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
+        textfont: { color: "#374151", size: 11 },
+        marker: { color: d.efforts.map(function (e) {
+          return CFG.effortColors[e.key] || CFG.unknownColor; }) },
+        hovertemplate: "%{x}<br>%{y:,} tokens<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: "Tokens by reasoning effort" },
+        xaxis: axis("xaxis", { title: { text: "Configured reasoning effort" } }),
+        yaxis: axis("yaxis", { title: { text: "Input + output tokens" },
+                                range: paddedRange(Math.max.apply(null, values)) })
+      }, Math.max(260, 34 * d.efforts.length + 120))
+    };
+  }
+
+  function present(id, spec) {
+    var plotEl = $("plot-" + id);
+    var card = document.querySelector('[data-slot="' + id + '"]');
+    if (!plotEl || !card) { return; }
+    if (spec) {
+      card.hidden = false;
+      plotEl.hidden = false;
+      Plotly.react(plotEl, spec.traces, spec.layout, CFG.plotlyConfig);
+    } else {
+      Plotly.purge(plotEl);
+      plotEl.innerHTML = "";
+      plotEl.hidden = true;
+      card.hidden = true;
+    }
+  }
+
+  function presentNotice(id, show, html) {
+    var card = document.querySelector('[data-slot="' + id + '"]');
+    var emptyEl = document.querySelector('[data-empty-for="' + id + '"]');
+    if (!card || !emptyEl) { return; }
+    card.hidden = !show;
+    emptyEl.hidden = !show;
+    emptyEl.innerHTML = show ? (html || "") : "";
+  }
+
+  function costEmpty(d) {
+    return "<b>Not enough priced usage to rank yet.</b> Cost was recorded for " +
+      "<b>" + d.costed.length + " of " + d.modelCount + "</b> models (" +
+      group(d.costRows) + " of " + group(d.rows.length) + " rows, " +
+      (d.rows.length ? (d.costRows / d.rows.length * 100).toFixed(1) : "0.0") +
+      "% coverage). The remaining " + d.freeModelCount +
+      " models recorded no cost, which usually means a free tier or an " +
+      "unreported provider. Both charts appear here once at least " +
+      CFG.minCostModels + " models carry cost.";
+  }
+
+  // A single priced model makes a stray bar rather than a ranking, so the gate
+  // covers the whole section rather than each chart separately.
+  function enoughPricedModels(d) {
+    return d.costed.length >= CFG.minCostModels;
+  }
+
+  function effortEmpty() {
+    return "<b>No reasoning effort to compare.</b> Every message in this export " +
+      "used the provider default, so there is nothing to rank. The chart " +
+      "appears once two or more effort levels are recorded.";
+  }
+
+  function footerHtml(d) {
+    var out = ["<p>Cache read is an independent counter reported separately from " +
+               "input and output; it is not part of the input + output total " +
+               "above.</p>"];
+    if (d.modelCount > CFG.topN) {
+      var shown = d.models.slice(0, CFG.topN).reduce(function (a, m) {
+        return a + m.total_tokens; }, 0);
+      out.push("<p>The model ranking shows the top " + CFG.topN + " of " +
+        d.modelCount + " models, covering " + group(shown) + " of " +
+        group(d.totals.tokens) + " tokens (" +
+        (d.totals.tokens ? (shown / d.totals.tokens * 100).toFixed(1) : "0.0") +
+        "%).</p>");
+    }
+    return out.join("");
+  }
+
+  function render() {
+    var d = aggregate(state.rows);
+
+    $("kpis").innerHTML = kpiHtml(d);
+    $("scope").innerHTML = scopeHtml(d);
+    $("subtitle").innerHTML = subtitleHtml(d);
+    $("insights").innerHTML = insightHtml(d);
+    $("footer-notes").innerHTML = footerHtml(d);
+
+    present("trend-tokens", trendSpec(d.daily, "total_tokens", "tokens"));
+    present("trend-cost", trendSpec(d.daily, "cost_usd", "cost"));
+    present("projects", rankingSpec(d.projects,
+      "Top " + Math.min(d.projects.length, CFG.topN) + " projects by tokens", ""));
+    present("models", rankingSpec(d.models,
+      "Top " + Math.min(d.models.length, CFG.topN) + " models by tokens", ""));
+    present("composition", compositionSpec(d));
+    present("providers", providerSpec(d));
+
+    var priced = enoughPricedModels(d);
+    presentNotice("cost-notice", !priced, costEmpty(d));
+    present("cost-by-model", priced ? costByModelSpec(d) : null);
+    present("efficiency", priced ? efficiencySpec(d) : null);
+    present("effort", effortSpec(d));
+    presentNotice("effort-notice", !effortSpec(d), effortEmpty());
+
+    // Cards hidden by a gate start at zero width, so charts revealed on a later
+    // render need an explicit resize once they are visible.
+    if (window.Plotly && Plotly.Plots) {
+      Array.prototype.forEach.call(
+        document.querySelectorAll(".plot-slot:not([hidden])"),
+        function (el) { Plotly.Plots.resize(el); }
+      );
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", render);
+  } else {
+    render();
+  }
+
+  // Exposed so tests can drive the render path the way a filter would.
+  window.__DASHBOARD_RENDER__ = render;
+})();
+"""
+
+
+def _client_rows(data: pd.DataFrame) -> list:
+    """The rows the page needs, trimmed to the columns it actually uses."""
+    columns = [
+        "date", "project", "provider", "model", "calls", "input_tokens",
+        "output_tokens", "cache_read_tokens", "cache_write_tokens",
+        "reasoning_tokens", "total_tokens", "cost_usd", "session_id",
+    ]
+    has_variant = "variant" in data.columns
+    rows = []
+    for record in data.to_dict("records"):
+        row = {column: record[column] for column in columns}
+        row["date"] = pd.Timestamp(record["date"]).date().isoformat()
+        row["variant"] = record.get("variant") or "n/a" if has_variant else "n/a"
+        rows.append(row)
+    return rows
+
+
+def _client_config(data: pd.DataFrame, rows: list, generated_at: str) -> dict:
+    """Everything the client needs that is not per-row data."""
+    return {
+        "template": {"layout": pio.templates[TEMPLATE_NAME].layout.to_plotly_json()},
+        "plotlyConfig": {"responsive": True, "displaylogo": False},
+        "aggregateColor": AGGREGATE_COLOR,
+        "categoricalColors": list(CATEGORICAL_COLORS),
+        "categoryColors": dict(CATEGORY_COLORS),
+        "categoryLabels": dict(CATEGORY_LABELS),
+        "effortColors": dict(EFFORT_COLORS),
+        "unknownColor": UNKNOWN_COLOR,
+        "topN": TOP_N,
+        "minLabelShare": MIN_LABEL_SHARE,
+        "labelHeadroom": LABEL_HEADROOM,
+        "minCostModels": MIN_COST_MODELS,
+        "minCallsForEfficiency": MIN_CALLS_FOR_EFFICIENCY,
+        "userCount": int(data["user"].nunique()) if "user" in data.columns else 1,
+        "generatedAt": generated_at,
+    }
+
+
+def _slot(chart_id: str, css: str = "") -> str:
+    """A chart card holding a plot target and an insufficient-data fallback."""
+    classes = ("card " + css).strip()
+    return (
+        f'<div class="{classes}" data-slot="{chart_id}">'
+        f'<div class="plot-slot" id="plot-{chart_id}"></div>'
+        f'<div class="empty-state" data-empty-for="{chart_id}" hidden></div>'
+        "</div>"
+    )
+
+
+def _glossary_html() -> str:
+    items = "".join(
+        f'<dl class="glossary-item'
+        f'{" highlight" if name == "Cache read" else ""}">'
+        f"<dt>{html.escape(name)}</dt><dd>{html.escape(body)}</dd></dl>"
+        for name, body in CATEGORY_EXPLAINERS.items()
+    )
+    return (
+        '<details class="explain"><summary>What do these token '
+        f'categories mean?</summary><div class="glossary-grid">{items}</div>'
+        '<p class="explain-note">Cache read and reasoning are tracked as '
+        "independent counters, so they are not part of the input + output "
+        "headline.</p></details>"
     )
 
 
 def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
-    tokens = int(data["total_tokens"].sum())
-    cost = float(data["cost_usd"].sum())
-    calls = int(data["calls"].sum())
-    sessions = data["session_id"].nunique() if "session_id" in data else None
-    cache_read = int(data["cache_read_tokens"].sum())
+    plotly_template()
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    rows = _client_rows(data)
+    payload = _json_for_script({
+        "rows": rows,
+        "config": _client_config(data, rows, generated_at),
+    })
 
-    daily = data.groupby("date", as_index=False).agg(
-        total_tokens=("total_tokens", "sum"), cost_usd=("cost_usd", "sum")
-    )
-    composition = data[[
-        "input_tokens", "output_tokens", "cache_read_tokens",
-        "cache_write_tokens", "reasoning_tokens",
-    ]].sum().rename_axis("category").reset_index(name="tokens")
-    composition["label"] = composition["category"].map(CATEGORY_LABELS)
-    # Cache read is a raw counter that can dwarf input+output, so it is charted
-    # separately; otherwise it flattens every other category to a hairline.
-    composition_main = composition[
-        ~composition["category"].eq("cache_read_tokens")
-    ]
-    by_model = data.groupby("model", as_index=False).agg(
-        total_tokens=("total_tokens", "sum")
-    ).sort_values("total_tokens", ascending=False).head(TOP_N)
-    model_tokens = int(data["total_tokens"].sum())
-    model_shown = int(by_model["total_tokens"].sum())
-    by_project = data.groupby("project", as_index=False).agg(
-        total_tokens=("total_tokens", "sum")
-    ).sort_values("total_tokens", ascending=False).head(TOP_N)
-    by_provider = data.groupby("provider", as_index=False).agg(
-        total_tokens=("total_tokens", "sum")
-    ).sort_values("total_tokens", ascending=False)
-
-    # Cost is optional: providers only report it for billable models, so most
-    # rows can carry a genuine zero. Coverage is tracked separately from total.
-    by_model_cost = data.groupby("model", as_index=False).agg(
-        cost_usd=("cost_usd", "sum"),
-        total_tokens=("total_tokens", "sum"),
-        calls=("calls", "sum"),
-    )
-    costed = by_model_cost[by_model_cost["cost_usd"] > 0].sort_values(
-        "cost_usd", ascending=False
-    )
-    free_model_count = len(by_model_cost) - len(costed)
-    cost_rows = int((data["cost_usd"] > 0).sum())
-    cost_coverage = cost_rows / len(data) if len(data) else 0.0
-    costed["label"] = [_fmt_cost(value) for value in costed["cost_usd"]]
-    efficiency = costed[costed["calls"] >= MIN_CALLS_FOR_EFFICIENCY].copy()
-    efficiency["tokens_per_dollar"] = (
-        efficiency["total_tokens"] / efficiency["cost_usd"]
-    )
-    efficiency = efficiency.sort_values("tokens_per_dollar", ascending=False)
-    efficiency["label"] = [
-        f"{value:,.0f} tok/$" for value in efficiency["tokens_per_dollar"]
-    ]
-
-    # load_data() supplies `variant`; a caller passing a bare frame may not.
-    if "variant" in data:
-        effort = (
-            data.groupby("variant", as_index=False)
-            .agg(total_tokens=("total_tokens", "sum"), calls=("calls", "sum"))
-            .sort_values("total_tokens", ascending=False)
-        )
-    else:
-        effort = pd.DataFrame({"variant": [], "total_tokens": [], "calls": []})
-
-    # Compact labels for the in-chart text; exact values stay available on hover.
-    by_model["label"] = [_fmt_tokens(value) for value in by_model["total_tokens"]]
-    by_project["label"] = [_fmt_tokens(value) for value in by_project["total_tokens"]]
-    composition_main["label_value"] = [
-        _fmt_tokens(value) for value in composition_main["tokens"]
-    ]
-
-    template = plotly_template()
-
-    token_chart = px.line(
-        daily, x="date", y="total_tokens", markers=True, title="Tokens by day",
-        template=template,
-        labels={"date": "Date", "total_tokens": "Input + output tokens"},
-    )
-    cost_chart = px.line(
-        daily, x="date", y="cost_usd", markers=True, title="Recorded cost by day",
-        template=template,
-        labels={"date": "Date", "cost_usd": "Recorded cost (USD)"},
-    )
-    composition_chart = px.bar(
-        composition_main, x="label", y="tokens", text="label_value",
-        labels={"label": "Token category", "tokens": "Tokens"},
-        title="Token categories (input, output, reasoning)",
-        template=template,
-    )
-    model_chart = px.bar(
-        by_model, x="total_tokens", y="model", orientation="h", text="label",
-        labels={"total_tokens": "Input + output tokens", "model": ""},
-        title=f"Top {len(by_model)} models by tokens",
-        template=template,
-    )
-    project_chart = px.bar(
-        by_project, x="total_tokens", y="project", orientation="h", text="label",
-        labels={"total_tokens": "Input + output tokens", "project": ""},
-        title=f"Top {len(by_project)} projects by tokens",
-        template=template,
-    )
-    provider_chart = px.pie(
-        by_provider, names="provider", values="total_tokens", hole=0.45,
-        title="Tokens by provider", template=template,
-        labels={"provider": "Provider", "total_tokens": "Tokens"},
-    )
-
-    # Aggregate charts carry a single series, so they share one blue.
-    for single_series in (token_chart, cost_chart):
-        single_series.update_traces(
-            line=dict(color=AGGREGATE_COLOR, width=2.5),
-            marker=dict(color=AGGREGATE_COLOR, size=6),
-            fill="tozeroy",
-            fillcolor="rgba(0, 114, 178, 0.10)",
-            hovertemplate="%{x}<br>%{y:,}<extra></extra>",
-        )
-    for ranking in (model_chart, project_chart):
-        ranking.update_traces(
-            marker=dict(color=AGGREGATE_COLOR),
-            texttemplate="%{text}", textposition="outside", cliponaxis=False,
-            textfont=dict(color="#374151", size=11),
-            hovertemplate="%{y}<br>%{x:,} tokens<extra></extra>",
-        )
-    composition_chart.update_traces(
-        marker=dict(color=[
-            CATEGORY_COLORS.get(category, UNKNOWN_COLOR)
-            for category in composition_main["category"]
-        ]),
-        texttemplate="%{text}", textposition="outside", cliponaxis=False,
-        textfont=dict(color="#374151", size=11),
-        hovertemplate="%{x}<br>%{y:,} tokens<extra></extra>",
-    )
-    providers = provider_colors(by_provider["provider"])
-    provider_total = by_provider["total_tokens"].sum()
-    # Slices below MIN_LABEL_SHARE collide with their neighbours and are
-    # unreadable, so they are left to the legend and hover instead.
-    provider_chart.update_traces(
-        text=[
-            f"{share:.1%}<br>{_fmt_tokens(value)}"
-            if share >= MIN_LABEL_SHARE else ""
-            for share, value in zip(
-                by_provider["total_tokens"] / provider_total,
-                by_provider["total_tokens"],
+    sections_html = []
+    for anchor, name, desc in SECTIONS:
+        if anchor == "sec-overview":
+            body = (
+                '<div class="kpi-row" id="kpis"></div>'
+                '<p class="scope-summary" id="scope"></p>'
+                '<div class="insight-bar" id="insights"></div>'
+                '<div class="grid">'
+                f'{_slot("trend-tokens", "full")}{_slot("trend-cost", "full")}'
+                f'{_slot("projects")}{_slot("models")}'
+                "</div>"
             )
-        ],
-        texttemplate="%{text}",
-        textposition="inside",
-        textfont=dict(color="#ffffff", size=11),
-        marker=dict(
-            colors=[providers[name] for name in by_provider["provider"]],
-            line=dict(width=0),
-        ),
-        hovertemplate="%{label}<br>%{value:,} tokens (%{percent})<extra></extra>",
-    )
-    provider_chart.update_layout(
-        legend=dict(
-            orientation="h", yanchor="top", y=-0.05, xanchor="center", x=0.5,
-            title=dict(text=""),
+        elif anchor == "sec-cost":
+            body = (
+                _slot("cost-notice", "full")
+                + '<div class="grid">'
+                f'{_slot("cost-by-model", "full")}{_slot("efficiency")}'
+                "</div>"
+            )
+        else:
+            body = (
+                '<div class="grid">'
+                f'{_slot("composition")}{_slot("providers")}'
+                "</div>"
+                + _slot("effort-notice")
+                + _slot("effort")
+                + f'<div class="grid full">{_glossary_html()}</div>'
+            )
+        sections_html.append(
+            f'<section class="section" id="{anchor}">'
+            f'<div class="section-head"><h2>{name}</h2></div>'
+            f'<p class="section-desc">{desc}</p>{body}</section>'
         )
-    )
-    model_chart.update_layout(yaxis={"categoryorder": "total ascending"})
-    project_chart.update_layout(yaxis={"categoryorder": "total ascending"})
-    for ranking, frame in ((model_chart, by_model), (project_chart, by_project)):
-        _pad_axis_for_labels(ranking, "xaxis", float(frame["total_tokens"].max()))
-    _pad_axis_for_labels(composition_chart, "yaxis", float(composition_main["tokens"].max()))
-    _label_peak(token_chart, daily, "total_tokens", "tokens")
-    _label_peak(cost_chart, daily, "cost_usd", "cost")
-
-    cost_chart_by_model = px.bar(
-        costed, x="cost_usd", y="model", orientation="h", text="label",
-        labels={"cost_usd": "Estimated cost (USD)", "model": ""},
-        title="Estimated cost by model", template=template,
-    )
-    cost_chart_by_model.update_traces(
-        marker=dict(color=AGGREGATE_COLOR),
-        texttemplate="%{text}", textposition="outside", cliponaxis=False,
-        textfont=dict(color="#374151", size=11),
-        hovertemplate="%{y}<br>$%{x:,.4f}<extra></extra>",
-    )
-    cost_chart_by_model.update_layout(yaxis={"categoryorder": "total ascending"})
-    _pad_axis_for_labels(cost_chart_by_model, "xaxis", float(costed["cost_usd"].max()))
-
-    efficiency_chart = px.bar(
-        efficiency, x="tokens_per_dollar", y="model", orientation="h",
-        text="label",
-        labels={
-            "tokens_per_dollar": "Tokens per estimated USD (confirmed calls)",
-            "model": "",
-        },
-        title=f"Pricing efficiency by model ({MIN_CALLS_FOR_EFFICIENCY}+ calls)",
-        template=template,
-    )
-    efficiency_chart.update_traces(
-        marker=dict(color=AGGREGATE_COLOR),
-        texttemplate="%{text}", textposition="outside", cliponaxis=False,
-        textfont=dict(color="#374151", size=11),
-        hovertemplate="%{y}<br>%{x:,.0f} tokens per $<extra></extra>",
-    )
-    efficiency_chart.update_layout(yaxis={"categoryorder": "total ascending"})
-    _pad_axis_for_labels(
-        efficiency_chart, "xaxis", float(efficiency["tokens_per_dollar"].max())
-    )
-
-    effort_chart = px.bar(
-        effort, x="variant", y="total_tokens", text="total_tokens",
-        labels={"variant": "Configured reasoning effort", "total_tokens": "Input + output tokens"},
-        title="Tokens by reasoning effort", template=template,
-    )
-    effort_chart.update_traces(
-        marker=dict(color=[
-            EFFORT_COLORS.get(str(value), UNKNOWN_COLOR) for value in effort["variant"]
-        ]),
-        texttemplate="%{text:,.0f}", textposition="outside", cliponaxis=False,
-        textfont=dict(color="#374151", size=11),
-        hovertemplate="%{x}<br>%{y:,} tokens<extra></extra>",
-    )
-    _pad_axis_for_labels(effort_chart, "yaxis", float(effort["total_tokens"].max()))
-
-    # Dates arrive as datetime.date from load_data, but callers may pass raw strings.
-    dates = sorted(pd.Timestamp(value).date() for value in data["date"].unique())
-    latest = dates[-1].isoformat()
-    first = dates[0].isoformat()
-    span = f"{first} to {latest}" if len(dates) > 1 else first
-    users = data["user"].nunique()
-    scope_summary = (
-        f"{span} &middot; {data['project'].nunique()} projects &middot; "
-        f"{data['model'].nunique()} models &middot; {users} user"
-        f"{'s' if users != 1 else ''}"
-    )
-    subtitle = (
-        f"Data through {latest} &middot; "
-        f"generated {datetime.now():%Y-%m-%d %H:%M} &middot; local session-store exports"
-    )
-    hidden_models = data["model"].nunique() - len(by_model)
-
-    figures = [
-        (token_chart, 380),
-        (cost_chart, 380),
-        (composition_chart, 340),
-        (model_chart, max(260, 34 * len(by_model) + 120)),
-        (project_chart, max(260, 34 * len(by_project) + 120)),
-        (provider_chart, 380),
-    ]
-    for fig, height in figures:
-        fig.update_layout(height=height)
-
-    def card(figure_html: str, full: bool = False) -> str:
-        css = "card full" if full else "card"
-        return f'<div class="{css}">{figure_html}</div>'
-
-    def plot(figure, full: bool = False) -> str:
-        # plotly.js is emitted once in the head, so no figure is responsible for
-        # carrying it. That keeps rendering independent of section order.
-        return card(
-            pio.to_html(
-                figure,
-                full_html=False,
-                include_plotlyjs=False,
-                config={"responsive": True, "displaylogo": False},
-            ),
-            full,
-        )
-
-    kpis = [("Input + output tokens", f"{tokens:,}", None),
-            ("Recorded cost (USD)", _fmt_cost(cost), "Reported by OpenCode, not an invoice"),
-            ("Assistant messages", f"{calls:,}", None)]
-    if sessions is not None:
-        kpis.append(("Sessions", f"{sessions:,}", None))
-    kpis.append((
-        "Cache read tokens", f"{cache_read:,}",
-        "Independent counter, not part of the total above",
-    ))
-    kpi_html = "".join(
-        f'<div class="kpi"><div class="kpi-label">{label}</div>'
-        f'<div class="kpi-value">{value}</div>'
-        + (f'<div class="kpi-note">{note}</div>' if note else "")
-        + "</div>"
-        for label, value, note in kpis
-    )
 
     nav_html = "".join(
         f'<a href="#{anchor}">{name}</a>' for anchor, name, _ in SECTIONS
     )
 
-    # Observations are derived from the data rather than written by hand, so
-    # they stay true as the exports change.
-    insights = []
-    if not by_project.empty and model_tokens:
-        lead_project = by_project.iloc[0]
-        project_share = lead_project["total_tokens"] / model_tokens
-        insights.append((
-            "info",
-            f"<b>{_escape(lead_project['project'])}</b> accounts for "
-            f"<b>{project_share:.0%}</b> of recorded tokens.",
-        ))
-    if not by_model.empty and model_tokens:
-        lead_model = by_model.iloc[0]
-        insights.append((
-            "info",
-            f"Leading model: <b>{_escape(lead_model['model'])}</b> at "
-            f"<b>{lead_model['total_tokens'] / model_tokens:.0%}</b> of tokens.",
-        ))
-    if cache_read and tokens:
-        ratio = cache_read / tokens
-        if ratio >= 1:
-            insights.append((
-                "info",
-                f"Cache reads are <b>{ratio:.0f}x</b> the input + output total. "
-                "Most work is re-reading context, not generating it.",
-            ))
-    if cost_coverage < 1:
-        insights.append((
-            "warn" if cost_coverage == 0 else "info",
-            f"Cost was recorded for <b>{cost_rows} of {len(data)}</b> exported "
-            f"rows ({cost_coverage:.1%}). Providers only report cost for "
-            f"billable models; <b>{free_model_count}</b> of "
-            f"{len(by_model_cost)} models recorded none.",
-        ))
-
-    def insight_bar(items) -> str:
-        if not items:
-            return ""
-        rows = "".join(
-            f'<div class="insight {kind}"><div>{text}</div></div>'
-            for kind, text in items
-        )
-        return f'<div class="insight-bar">{rows}</div>'
-
-    def empty_state(message: str) -> str:
-        return f'<div class="card"><div class="empty-state">{message}</div></div>'
-
-    def glossary_html() -> str:
-        items = "".join(
-            f'<dl class="glossary-item'
-            f'{" highlight" if name == "Cache read" else ""}">'
-            f"<dt>{name}</dt><dd>{body}</dd></dl>"
-            for name, body in CATEGORY_EXPLAINERS.items()
-        )
-        return (
-            '<details class="explain"><summary>What do these token '
-            f'categories mean?</summary><div class="glossary-grid">{items}</div>'
-            "<p class=\"explain-note\">"
-            "Cache read and reasoning are tracked as independent counters, so "
-            "they are not part of the input + output headline.</p></details>"
-        )
-
-    if len(costed) >= MIN_COST_MODELS:
-        cost_body = f'<div class="grid">{plot(cost_chart_by_model, full=True)}'
-        if not efficiency.empty:
-            cost_body += plot(efficiency_chart)
-        cost_body += "</div>"
-    else:
-        cost_body = (
-            '<div class="grid">'
-            + empty_state(
-                f"<b>Not enough priced usage to rank yet.</b> Cost was recorded "
-                f"for <b>{len(costed)} of {len(by_model_cost)}</b> models "
-                f"({cost_rows} of {len(data)} rows, {cost_coverage:.1%} coverage). "
-                f"The remaining {free_model_count} models recorded no cost, which "
-                "usually means a free tier or an unreported provider. Both "
-                "charts appear here once at least "
-                f"{MIN_COST_MODELS} models carry cost."
-            )
-            + "</div>"
-        )
-
-    # A single non-default variant is not a comparison. Only render the chart
-    # once at least two variants actually carry tokens.
-    if int((effort["total_tokens"] > 0).sum()) >= 2:
-        effort_body = f'<div class="grid">{plot(effort_chart)}</div>'
-    else:
-        effort_body = (
-            '<div class="grid full">'
-            + empty_state(
-                "<b>No reasoning effort to compare.</b> Every message in this "
-                "export used the provider default, so there is nothing to rank. "
-                "The chart appears once two or more effort levels are recorded."
-            )
-            + "</div>"
-        )
-
-    section_bodies = {
-        "sec-overview": (
-            f'<div class="kpi-row">{kpi_html}</div>'
-            f'<p class="scope-summary">{scope_summary}</p>'
-            f"{insight_bar(insights)}"
-            f'<div class="grid">'
-            f"{plot(token_chart, full=True)}{plot(cost_chart, full=True)}"
-            f"{plot(project_chart)}{plot(model_chart)}"
-            "</div>"
-        ),
-        "sec-cost": cost_body,
-        "sec-composition": (
-            f'<div class="grid">'
-            f"{plot(composition_chart)}{plot(provider_chart)}"
-            "</div>"
-            f"{effort_body}"
-            f'{glossary_html()}'
-        ),
-    }
-
-    sections_html = []
-    for anchor, name, desc in SECTIONS:
-        sections_html.append(
-            f'<section class="section" id="{anchor}">'
-            f'<div class="section-head"><h2>{name}</h2></div>'
-            f'<p class="section-desc">{desc}</p>'
-            f"{section_bodies[anchor]}</section>"
-        )
-
-    notes = [
-        "<p>Cache read is an independent counter reported separately from input "
-        "and output; it is not part of the input + output total above.</p>"
-    ]
-    if hidden_models > 0:
-        notes.append(
-            f"<p>The model ranking shows the top {len(by_model)} of "
-            f"{data['model'].nunique()} models, covering {model_shown:,} of "
-            f"{model_tokens:,} tokens ({model_shown / model_tokens:.1%}).</p>"
-        )
-
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>OpenCode Usage Dashboard</title>
 <style>{PAGE_CSS}</style>
-<script>{get_plotlyjs()}</script></head><body>
+<script>{get_plotlyjs()}</script>
+</head><body>
 <div class="hero">
 <h1>OpenCode Usage Dashboard</h1>
-<p class="subtitle">{subtitle}</p>
+<p class="subtitle" id="subtitle"></p>
 <nav class="nav-pills">{nav_html}</nav>
 </div>
 <div class="page">
 {"".join(sections_html)}
-<footer class="footer-note">{"".join(notes)}</footer>
+<footer class="footer-note" id="footer-notes"></footer>
 </div>
+<script>window.__DASHBOARD__ = {payload};</script>
+<script>{CLIENT_JS}</script>
 </body></html>"""
     out_path.write_text(html, encoding="utf-8")
-
 
 
 def main(argv=None) -> int:
