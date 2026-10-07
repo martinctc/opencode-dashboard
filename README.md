@@ -72,6 +72,42 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest
 ```
 
+Most tests are plain unit tests. `tests/test_dashboard_ux.py` additionally
+drives the generated dashboard in a real browser, and skips itself when
+Playwright is unavailable:
+
+```powershell
+python -m pip install playwright
+playwright install chromium
+python -m pytest tests/test_dashboard_ux.py -q
+```
+
+### Sample data
+
+A real export is usually too small to exercise the dashboard: a few days of
+history, and no recorded cost for free-tier models, leave the cost and
+reasoning-effort sections with nothing to show. `tools/make_sample_data.py`
+generates a deterministic synthetic export with the same schema, 90 days of
+history, and a deliberate mix of free and paid models.
+
+It is seeded, so repeated runs produce byte-identical output. Project names use
+the fictitious companies Microsoft uses in documentation, so no real project
+name can reach a published screenshot.
+
+```powershell
+python tools/make_sample_data.py --out sample_usage.csv
+python dashboard.py --in sample_usage.csv --out sample_dashboard.html
+```
+
+### Screenshots
+
+```powershell
+python tools/make_screenshots.py --html sample_dashboard.html --out-dir docs/images
+```
+
+Captures each section at desktop and mobile widths. Regenerate after changing
+the dashboard layout. Requires the Playwright install above.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

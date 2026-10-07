@@ -38,6 +38,10 @@ TOP_N = 10
 # text overlaps its neighbours and is unreadable either way.
 MIN_LABEL_SHARE = 0.05
 
+# Fraction of the value axis left empty past the largest bar, so its outside
+# label has somewhere to sit.
+LABEL_HEADROOM = 0.18
+
 # A cost or efficiency ranking needs more than one qualifying model to be a
 # chart rather than a stray bar. Below these thresholds the section states what
 # it can actually prove instead.
@@ -362,6 +366,20 @@ def _escape(value) -> str:
     return html.escape(str(value), quote=True)
 
 
+def _pad_axis_for_labels(
+    figure, axis: str, maximum: float, fraction: float = LABEL_HEADROOM
+) -> None:
+    """Reserve headroom on a value axis so outside bar labels are not clipped.
+
+    Plotly does not account for `textposition="outside"` when scaling an axis, so
+    the label on the longest bar runs past the plot area and is cut off by the
+    card edge.
+    """
+    if not maximum or maximum <= 0:
+        return
+    figure.update_layout(**{axis: {"range": [0, maximum * (1 + fraction)]}})
+
+
 def _label_peak(figure, frame: pd.DataFrame, value_column: str, unit: str) -> None:
     """Annotate the largest point so the headline day is readable without hovering."""
     if frame.empty:
@@ -541,6 +559,9 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     )
     model_chart.update_layout(yaxis={"categoryorder": "total ascending"})
     project_chart.update_layout(yaxis={"categoryorder": "total ascending"})
+    for ranking, frame in ((model_chart, by_model), (project_chart, by_project)):
+        _pad_axis_for_labels(ranking, "xaxis", float(frame["total_tokens"].max()))
+    _pad_axis_for_labels(composition_chart, "yaxis", float(composition_main["tokens"].max()))
     _label_peak(token_chart, daily, "total_tokens", "tokens")
     _label_peak(cost_chart, daily, "cost_usd", "cost")
 
@@ -556,6 +577,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         hovertemplate="%{y}<br>$%{x:,.4f}<extra></extra>",
     )
     cost_chart_by_model.update_layout(yaxis={"categoryorder": "total ascending"})
+    _pad_axis_for_labels(cost_chart_by_model, "xaxis", float(costed["cost_usd"].max()))
 
     efficiency_chart = px.bar(
         efficiency, x="tokens_per_dollar", y="model", orientation="h",
@@ -574,6 +596,9 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         hovertemplate="%{y}<br>%{x:,.0f} tokens per $<extra></extra>",
     )
     efficiency_chart.update_layout(yaxis={"categoryorder": "total ascending"})
+    _pad_axis_for_labels(
+        efficiency_chart, "xaxis", float(efficiency["tokens_per_dollar"].max())
+    )
 
     effort_chart = px.bar(
         effort, x="variant", y="total_tokens", text="total_tokens",
@@ -588,6 +613,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
         textfont=dict(color="#374151", size=11),
         hovertemplate="%{x}<br>%{y:,} tokens<extra></extra>",
     )
+    _pad_axis_for_labels(effort_chart, "yaxis", float(effort["total_tokens"].max()))
 
     # Dates arrive as datetime.date from load_data, but callers may pass raw strings.
     dates = sorted(pd.Timestamp(value).date() for value in data["date"].unique())

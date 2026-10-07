@@ -5,6 +5,8 @@ venv/
 *.py[cod]
 opencode_usage_*.csv
 usage_dashboard.html
+sample_usage*.csv
+sample_dashboard*.html
 *.db
 *.db-shm
 *.db-wal
