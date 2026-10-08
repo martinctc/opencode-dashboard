@@ -175,6 +175,10 @@ If you use GitHub Copilot CLI, use
 [microsoft/ghc-cli-dashboard](https://github.com/microsoft/ghc-cli-dashboard)
 instead — it is the maintained upstream tool for that CLI.
 
+[Parity](docs/parity.md) records what this dashboard does not yet do compared
+with the upstream one, including the filter, metric-toggle and redaction
+features that are still outstanding.
+
 ### Trademarks
 
 This project may reference trademarks of other projects, products and services.
