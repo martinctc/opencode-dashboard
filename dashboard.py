@@ -202,6 +202,78 @@ body {
 .nav-pills a:hover { background: #eef3ff; }
 .nav-pills a:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: 3px; }
 .page { padding: 20px 32px 48px; max-width: 1600px; margin: auto; }
+.layout { display: flex; gap: 24px; align-items: flex-start; }
+.main { flex: 1; min-width: 0; }
+.sidebar-shell {
+  flex: 0 0 260px; min-width: 0; display: flex; flex-direction: column; gap: 12px;
+  position: sticky; top: 14px; max-height: calc(100vh - 28px);
+}
+.sidebar {
+  min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+}
+.layout.sidebar-collapsed .sidebar-shell { flex-basis: 44px; }
+.layout.sidebar-collapsed .sidebar { display: none; }
+.layout.sidebar-collapsed #sidebar-toggle-label { display: none; }
+.sidebar-toggle {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 10px; min-height: 40px; flex-shrink: 0; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--card-bg); cursor: pointer; font: inherit;
+  font-size: 12.5px; font-weight: 650; color: var(--muted);
+}
+.sidebar-toggle:hover { background: var(--surface); color: var(--text); }
+.side-panel {
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px;
+}
+.side-panel h2 {
+  margin: 0 0 10px; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted);
+}
+.filter-search {
+  display: block; width: 100%; padding: 7px 8px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 13px;
+}
+.filter-list { display: flex; flex-direction: column; }
+.filter-item { display: flex; align-items: center; gap: 4px; font-size: 13px; }
+.filter-item label {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  padding: 5px 4px; border-radius: 4px; cursor: pointer;
+}
+.filter-item label:hover { background: var(--surface); }
+.filter-item input[type="checkbox"] { flex-shrink: 0; margin: 0; }
+.filter-name { flex: 1; overflow-wrap: anywhere; }
+.filter-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.filter-item.provider-excluded label { color: var(--muted); }
+.filter-item.provider-excluded input { cursor: not-allowed; }
+.filter-blocked { width: 100%; padding: 0 4px 4px 24px; color: var(--muted); font-size: 11px; }
+.filter-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.filter-actions button {
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 8px;
+}
+.filter-actions button:hover { background: var(--surface-hover); }
+.filter-actions button[hidden] { display: none; }
+.filter-only {
+  border: 0; background: transparent; color: var(--accent-dark); cursor: pointer;
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 4px 6px; flex-shrink: 0;
+}
+.filter-only:hover { text-decoration: underline; }
+.filter-empty { font-size: 12.5px; color: var(--muted); padding: 4px; }
+.selection-summary { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
+.selection-summary b { color: var(--text); font-weight: 650; }
+.filter-actions.top {
+  margin: 0 0 14px;
+}
+.filter-actions.top button {
+  padding: 6px 12px; font-size: 12.5px;
+}
+.no-rows {
+  font-size: 13px; color: var(--muted); background: var(--card-bg);
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+}
+button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent-dark); outline-offset: 3px;
+}
 .section { margin-bottom: 8px; scroll-margin-top: 14px; }
 .section-head { display: flex; align-items: baseline; gap: 10px; margin: 28px 0 10px; }
 #sec-overview > .section-head { margin-top: 0; }
@@ -218,7 +290,11 @@ body {
   padding: 14px 18px; min-width: 0;
 }
 .kpi-label { font-size: 13px; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
-.kpi-value { font-size: 36px; font-weight: 700; letter-spacing: -0.01em; }
+/* Nine-digit totals must never push the page wider than the viewport. */
+.kpi-value {
+  font-size: clamp(20px, 2.4vw, 36px); font-weight: 700; letter-spacing: -0.01em;
+  overflow-wrap: anywhere; min-width: 0;
+}
 .kpi-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .scope-summary { color: var(--muted); font-size: 13px; margin-bottom: 12px; overflow-wrap: anywhere; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -268,17 +344,23 @@ details.explain summary:focus-visible { outline: 2px solid var(--accent-dark); o
 .footer-note p { margin: 6px 0; }
 @media (max-width: 1100px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
-  .kpi-value { font-size: 30px; }
+  .kpi-value { font-size: 28px; }
 }
 @media (max-width: 760px) {
   .hero { padding: 16px; }
   .hero h1 { font-size: 22px; }
   .page { padding: 16px; }
+  .layout { display: block; }
+  .sidebar-shell { position: static; max-height: none; margin-bottom: 16px; }
+  .sidebar-toggle { align-self: flex-start; }
+  .layout.sidebar-collapsed #sidebar-toggle-label { display: inline; }
   .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .kpi { padding: 12px; }
   .kpi-value { font-size: 28px; }
   .card { padding: 10px; }
   .nav-pills a { min-height: 44px; display: inline-flex; align-items: center; }
+  .sidebar-toggle { min-height: 44px; }
+  .filter-actions button, .filter-only { min-height: 32px; }
 }
 """
 
@@ -407,9 +489,250 @@ CLIENT_JS = r"""
   var SUM_FIELDS = ["total_tokens", "cost_usd", "calls", "input_tokens",
                     "output_tokens", "cache_read_tokens", "cache_write_tokens",
                     "reasoning_tokens"];
+  var FILTER_ORDER = ["project", "model", "provider"];
+
+  function resizePlots() {
+    if (window.Plotly && Plotly.Plots) {
+      Array.prototype.forEach.call(
+        document.querySelectorAll(".plot-slot:not([hidden])"),
+        function (el) { Plotly.Plots.resize(el); }
+      );
+    }
+  }
 
   // Phase 5c filters mutate this. Until then it is simply every row.
-  var state = { rows: D.rows };
+  var state = {
+    rows: D.rows,
+    allRows: D.rows,
+    excluded: { project: [], model: [], provider: [] },
+    limit: { project: CFG.filterPage, model: CFG.filterPage, provider: CFG.filterPage },
+    search: { project: "", model: "", provider: "" }
+  };
+
+  var STORAGE_KEY = "opencode-dashboard-filters";
+  var modelOwner = {};
+  var groupTotals = {};
+
+  function storageLoad() {
+    try {
+      return JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function storageSave() {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        excluded: state.excluded,
+        collapsed: document.getElementById("layout").classList
+          .contains("sidebar-collapsed")
+      }));
+    } catch (e) { /* private mode or file:// restrictions; filters still work */ }
+  }
+
+  // Index the data once: which models belong to which gateway, and how many
+  // tokens each filter item accounts for.
+  function indexRows() {
+    var i, r;
+    for (i = 0; i < D.rows.length; i++) {
+      r = D.rows[i];
+      modelOwner[r.model] = r.provider;
+      ["project", "model", "provider"].forEach(function (g) {
+        var key = r[g];
+        if (!groupTotals[g]) { groupTotals[g] = {}; }
+        if (!groupTotals[g][key]) { groupTotals[g][key] = 0; }
+        groupTotals[g][key] += r.total_tokens;
+      });
+    }
+  }
+
+  function itemsFor(group) {
+    return Object.keys(groupTotals[group]).sort(function (a, b) {
+      return groupTotals[group][b] - groupTotals[group][a];
+    });
+  }
+
+  function excludedSet(group) {
+    var set = new Set(state.excluded[group] || []);
+    // A model is also out of scope while its gateway is excluded. The stored
+    // model choice is left alone so re-including the gateway restores it.
+    if (group === "model") {
+      state.excluded.provider.forEach(function (p) {
+        itemsFor("model").forEach(function (m) {
+          if (modelOwner[m] === p) { set.add(m); }
+        });
+      });
+    }
+    return set;
+  }
+
+  function visibleItems(group) {
+    var out = [];
+    var excluded = excludedSet(group);
+    itemsFor(group).forEach(function (name) {
+      if (state.search[group] &&
+          name.toLowerCase().indexOf(state.search[group]) === -1) { return; }
+      out.push(name);
+    });
+    return out;
+  }
+
+  function buildFilterPanel(group) {
+    var list = document.querySelector('[data-list-for="' + group + '"]');
+    if (!list) { return; }
+    var names = visibleItems(group);
+    var excluded = excludedSet(group);
+    var shown = names.slice(0, state.limit[group]);
+    var blockedByProvider = group === "model";
+
+    var html = shown.map(function (name) {
+      var blocked = blockedByProvider &&
+        state.excluded.provider.indexOf(modelOwner[name]) !== -1;
+      var checked = !excluded.has(name);
+      return '<div class="filter-item' + (blocked ? " provider-excluded" : "") + '"' +
+        ' data-value="' + esc(name) + '">' +
+        "<label><input type=\"checkbox\" data-check=\"" + group + "\"" +
+        ' value="' + esc(name) + '"' + (checked ? " checked" : "") +
+        (blocked ? " disabled" : "") + ">" +
+        '<span class="filter-name">' + esc(name) + "</span>" +
+        '<span class="filter-count">' + fmtTokens(groupTotals[group][name]) +
+        "</span></label>" +
+        '<button type="button" class="filter-only" data-only="' + group +
+        '" data-value="' + esc(name) + '">Only</button>' +
+        (blocked ? '<div class="filter-blocked">Excluded by provider</div>' : "") +
+        "</div>";
+    }).join("");
+
+    list.innerHTML = html || '<div class="filter-empty">No matches</div>';
+
+    var more = document.querySelector('[data-action="more"][data-group="' + group + '"]');
+    if (more) { more.hidden = names.length <= state.limit[group]; }
+  }
+
+  function applyFilters() {
+    var projects = excludedSet("project");
+    var models = excludedSet("model");
+    var providers = excludedSet("provider");
+    state.rows = state.allRows.filter(function (r) {
+      return !projects.has(r.project) && !models.has(r.model) &&
+             !providers.has(r.provider);
+    });
+  }
+
+  function setExcluded(group, names) {
+    state.excluded[group] = names;
+  }
+
+  function selectionHtml(d) {
+    var parts = FILTER_ORDER.map(function (g) {
+      var total = itemsFor(g).length;
+      var excluded = excludedSet(g).size;
+      return "<b>" + (total - excluded) + "</b> of " + total + " " + g +
+        (total === 1 ? "" : "s");
+    });
+    var dates = d.daily.map(function (row) { return row.key; });
+    var span = "";
+    if (dates.length) {
+      span = (dates.length > 1 ? dates[0] + " to " + dates[dates.length - 1]
+                               : dates[0]) + " &middot; ";
+    }
+    return span + parts.join(" &middot; ") + " &middot; " +
+      state.rows.length.toLocaleString() + " of " +
+      state.allRows.length.toLocaleString() + " rows";
+  }
+
+  function refreshFilters(d) {
+    FILTER_ORDER.forEach(buildFilterPanel);
+    var selection = document.getElementById("selection");
+    if (selection) { selection.innerHTML = selectionHtml(d); }
+  }
+
+  function wireFilters() {
+    var layout = document.getElementById("layout");
+    var toggle = document.getElementById("sidebar-toggle");
+
+    if (storageLoad().collapsed) {
+      layout.classList.add("sidebar-collapsed");
+      toggle.setAttribute("aria-expanded", "false");
+    }
+    toggle.addEventListener("click", function () {
+      var collapsed = layout.classList.toggle("sidebar-collapsed");
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      storageSave();
+      resizePlots();
+    });
+
+    var reset = document.getElementById("reset-filters");
+    if (reset) {
+      reset.addEventListener("click", function () {
+        FILTER_ORDER.forEach(function (g) {
+          state.excluded[g] = [];
+          state.search[g] = "";
+          state.limit[g] = CFG.filterPage;
+          var box = document.querySelector('[data-search-for="' + g + '"]');
+          if (box) { box.value = ""; }
+        });
+        storageSave();
+        refresh();
+      });
+    }
+
+    FILTER_ORDER.forEach(function (group) {
+      var search = document.querySelector('[data-search-for="' + group + '"]');
+      if (search) {
+        search.addEventListener("input", function () {
+          state.search[group] = search.value.trim().toLowerCase();
+          state.limit[group] = CFG.filterPage;
+          refresh();
+        });
+      }
+
+      document.querySelectorAll('[data-action][data-group="' + group + '"]').forEach(
+        function (button) {
+          button.addEventListener("click", function () {
+            var action = button.getAttribute("data-action");
+            if (action === "more") {
+              state.limit[group] += CFG.filterPage;
+              refresh();
+            } else if (action === "all") {
+              // Includes items hidden by search or pagination.
+              setExcluded(group, []);
+              refresh();
+            } else if (action === "none") {
+              setExcluded(group, itemsFor(group));
+              refresh();
+            }
+          });
+        }
+      );
+    });
+
+    // Delegated: the lists are rebuilt on every render.
+    document.getElementById("sidebar").addEventListener("click", function (event) {
+      var only = event.target.closest("[data-only]");
+      if (!only) { return; }
+      var group = only.getAttribute("data-only");
+      var name = only.getAttribute("data-value");
+      setExcluded(group, itemsFor(group).filter(function (item) {
+        return item !== name;
+      }));
+      storageSave();
+      refresh();
+    });
+
+    document.getElementById("sidebar").addEventListener("change", function (event) {
+      var box = event.target;
+      if (!box.matches('input[type="checkbox"]')) { return; }
+      var group = box.getAttribute("data-check");
+      var name = box.value;
+      var excluded = state.excluded[group].filter(function (item) { return item !== name; });
+      if (!box.checked) { excluded.push(name); }
+      setExcluded(group, excluded);
+      storageSave();
+      refresh();
+    });
+  }
 
   function $(id) { return document.getElementById(id); }
 
@@ -616,15 +939,6 @@ CLIENT_JS = r"""
     return out.map(function (item) {
       return '<div class="insight ' + item[0] + '"><div>' + item[1] + "</div></div>";
     }).join("");
-  }
-
-  function scopeHtml(d) {
-    var dates = d.daily.map(function (row) { return row.key; });
-    if (!dates.length) { return "No dated usage available"; }
-    var span = dates.length > 1 ? dates[0] + " to " + dates[dates.length - 1] : dates[0];
-    var users = CFG.userCount;
-    return span + " &middot; " + d.projectCount + " projects &middot; " +
-      d.modelCount + " models &middot; " + users + " user" + (users === 1 ? "" : "s");
   }
 
   function trendSpec(entries, field, unit) {
@@ -886,10 +1200,33 @@ CLIENT_JS = r"""
     var d = aggregate(state.rows);
 
     $("kpis").innerHTML = kpiHtml(d);
-    $("scope").innerHTML = scopeHtml(d);
     $("subtitle").innerHTML = subtitleHtml(d);
     $("insights").innerHTML = insightHtml(d);
     $("footer-notes").innerHTML = footerHtml(d);
+
+    var charts = document.getElementById("charts");
+    if (!d.rows.length) {
+      present("trend-tokens", null); present("trend-cost", null);
+      present("projects", null); present("models", null);
+      present("composition", null); present("providers", null);
+      present("cost-by-model", null); present("efficiency", null);
+      present("effort", null);
+      presentNotice("cost-notice", false);
+      presentNotice("effort-notice", false);
+      if (charts && !charts.querySelector(".no-rows")) {
+        var note = document.createElement("p");
+        note.className = "no-rows";
+        note.textContent = "No usage matches the current filters. " +
+          "Re-include an item, or use Reset filters.";
+        charts.insertBefore(note, charts.firstChild);
+      }
+      resizePlots();
+      return;
+    }
+    if (charts) {
+      var stale = charts.querySelector(".no-rows");
+      if (stale) { stale.remove(); }
+    }
 
     present("trend-tokens", trendSpec(d.daily, "total_tokens", "tokens"));
     present("trend-cost", trendSpec(d.daily, "cost_usd", "cost"));
@@ -907,24 +1244,40 @@ CLIENT_JS = r"""
     present("effort", effortSpec(d));
     presentNotice("effort-notice", !effortSpec(d), effortEmpty());
 
-    // Cards hidden by a gate start at zero width, so charts revealed on a later
-    // render need an explicit resize once they are visible.
-    if (window.Plotly && Plotly.Plots) {
-      Array.prototype.forEach.call(
-        document.querySelectorAll(".plot-slot:not([hidden])"),
-        function (el) { Plotly.Plots.resize(el); }
-      );
-    }
+    resizePlots();
+  }
+
+  function refresh() {
+    applyFilters();
+    var d = aggregate(state.rows);
+    refreshFilters(d);
+    render();
+    storageSave();
+  }
+
+  function init() {
+    indexRows();
+    var saved = storageLoad();
+    FILTER_ORDER.forEach(function (g) {
+      var stored = (saved.excluded || {})[g];
+      // Drop names that no longer exist in this export.
+      state.excluded[g] = Array.isArray(stored)
+        ? stored.filter(function (name) { return name in groupTotals[g]; })
+        : [];
+    });
+    wireFilters();
+    refresh();
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", render);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    render();
+    init();
   }
 
   // Exposed so tests can drive the render path the way a filter would.
   window.__DASHBOARD_RENDER__ = render;
+  window.__DASHBOARD_REFRESH__ = refresh;
 })();
 """
 
@@ -962,6 +1315,7 @@ def _client_config(data: pd.DataFrame, rows: list, generated_at: str) -> dict:
         "labelHeadroom": LABEL_HEADROOM,
         "minCostModels": MIN_COST_MODELS,
         "minCallsForEfficiency": MIN_CALLS_FOR_EFFICIENCY,
+        "filterPage": FILTER_PAGE,
         "userCount": int(data["user"].nunique()) if "user" in data.columns else 1,
         "generatedAt": generated_at,
     }
@@ -975,6 +1329,48 @@ def _slot(chart_id: str, css: str = "") -> str:
         f'<div class="plot-slot" id="plot-{chart_id}"></div>'
         f'<div class="empty-state" data-empty-for="{chart_id}" hidden></div>'
         "</div>"
+    )
+
+
+FILTER_GROUPS = [
+    ("project", "Projects"),
+    ("model", "Models"),
+    ("provider", "Providers"),
+]
+
+# Items shown before "Show more" is needed.
+FILTER_PAGE = 8
+
+
+def _filter_panel(group: str, title: str) -> str:
+    """One filter group. The item list is filled in by the client."""
+    return (
+        f'<div class="side-panel" data-filter-group="{group}">'
+        f"<h2>{title}</h2>"
+        f'<input class="filter-search" type="search" autocomplete="off"'
+        f' placeholder="Search {title.lower()}" data-search-for="{group}">'
+        f'<div class="filter-list" data-list-for="{group}"></div>'
+        '<div class="filter-actions">'
+        f'<button type="button" data-action="all" data-group="{group}">Select all</button>'
+        f'<button type="button" data-action="none" data-group="{group}">Select none</button>'
+        f'<button type="button" data-action="more" data-group="{group}" hidden>Show more</button>'
+        "</div></div>"
+    )
+
+
+def _sidebar_html() -> str:
+    panels = "".join(
+        _filter_panel(group, title) for group, title in FILTER_GROUPS
+    )
+    return (
+        '<aside class="sidebar-shell">'
+        '<button type="button" class="sidebar-toggle" id="sidebar-toggle"'
+        ' aria-expanded="true" aria-controls="sidebar">'
+        '<span aria-hidden="true">&#9662;</span>'
+        '<span id="sidebar-toggle-label">Hide filters</span>'
+        "</button>"
+        f'<div class="sidebar" id="sidebar">{panels}</div>'
+        "</aside>"
     )
 
 
@@ -1007,9 +1403,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
     for anchor, name, desc in SECTIONS:
         if anchor == "sec-overview":
             body = (
-                '<div class="kpi-row" id="kpis"></div>'
-                '<p class="scope-summary" id="scope"></p>'
-                '<div class="insight-bar" id="insights"></div>'
+                f'<div class="insight-bar" id="insights"></div>'
                 '<div class="grid">'
                 f'{_slot("trend-tokens", "full")}{_slot("trend-cost", "full")}'
                 f'{_slot("projects")}{_slot("models")}'
@@ -1053,8 +1447,20 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
 <nav class="nav-pills">{nav_html}</nav>
 </div>
 <div class="page">
+<div class="filter-actions top">
+<button type="button" id="reset-filters">Reset filters</button>
+</div>
+<p class="selection-summary" id="selection"></p>
+<div class="kpi-row" id="kpis"></div>
+<div class="layout" id="layout">
+{_sidebar_html()}
+<main class="main">
+<div id="charts">
 {"".join(sections_html)}
+</div>
 <footer class="footer-note" id="footer-notes"></footer>
+</main>
+</div>
 </div>
 <script>window.__DASHBOARD__ = {payload};</script>
 <script>{CLIENT_JS}</script>

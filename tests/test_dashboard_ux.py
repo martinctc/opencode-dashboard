@@ -255,6 +255,156 @@ def test_page_loads_without_external_requests(browser, sample_html):
         else None,
     )
     handle.goto(sample_html.resolve().as_uri())
-    handle.wait_for_selector(".js-plotly-plot .main-svg", timeout=30_000)
+    handle.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
     context.close()
     assert not external, f"page requested external resources: {external}"
+
+
+def _tokens(handle) -> str:
+    return handle.inner_text(".kpi-value")
+
+
+def test_filter_panel_lists_every_item(page):
+    """Each group is ranked by tokens, and paginated past the first page."""
+    for group, expected in (("project", 8), ("provider", 4)):
+        shown = page.eval_on_selector_all(
+            f'[data-filter-group="{group}"] .filter-item',
+            "els => els.map(e => e.dataset.value)",
+        )
+        assert len(shown) == expected, f"{group} listed {len(shown)} of {expected}"
+    models = page.eval_on_selector_all(
+        '[data-filter-group="model"] .filter-item', "els => els.length"
+    )
+    # Models paginate: only the first page shows until "Show more" is used.
+    assert models == 8
+    summary = page.inner_text("#selection")
+    assert "of 8 projects" in summary and "of 16 models" in summary
+
+
+def test_excluding_a_project_reduces_totals(page):
+    before = _tokens(page)
+    page.click('[data-filter-group="project"] .filter-item:first-child input')
+    page.wait_for_timeout(500)
+    after = _tokens(page)
+    assert int(after.replace(",", "")) < int(before.replace(",", ""))
+    assert "7 of 8 projects" in page.inner_text("#selection")
+
+
+def test_only_selects_a_single_project(page):
+    page.click('[data-filter-group="project"] .filter-item:nth-child(3) .filter-only')
+    page.wait_for_timeout(500)
+    summary = page.inner_text("#selection")
+    assert "1 of 8 projects" in summary
+    checked = page.eval_on_selector_all(
+        '[data-filter-group="project"] input:checked', "els => els.length"
+    )
+    assert checked == 1
+
+
+def test_reset_restores_everything(page):
+    baseline = _tokens(page)
+    page.click('[data-filter-group="project"] .filter-item:first-child input')
+    page.wait_for_timeout(400)
+    assert _tokens(page) != baseline
+    page.click("#reset-filters")
+    page.wait_for_timeout(500)
+    assert _tokens(page) == baseline
+    summary = page.inner_text("#selection")
+    assert "8 of 8 projects" in summary
+    assert "16 of 16 models" in summary
+
+
+def test_search_filters_the_list_not_the_usage(page):
+    """Search narrows which options are listed, never what is counted."""
+    baseline = _tokens(page)
+    page.fill('[data-search-for="model"]', "gpt")
+    page.wait_for_timeout(500)
+    shown = page.eval_on_selector_all(
+        '[data-filter-group="model"] .filter-item', "els => els.map(e => e.dataset.value)"
+    )
+    assert shown and all("gpt" in name for name in shown)
+    assert _tokens(page) == baseline, "search changed the reported usage"
+
+    page.fill('[data-search-for="model"]', "zzzz-no-such-model")
+    page.wait_for_timeout(400)
+    assert page.inner_text('[data-list-for="model"]').strip() == "No matches"
+
+
+def test_show_more_reveals_further_items(page):
+    visible = page.eval_on_selector_all(
+        '[data-filter-group="model"] .filter-item', "els => els.length"
+    )
+    assert visible == 8
+    page.click('[data-action="more"][data-group="model"]')
+    page.wait_for_timeout(400)
+    assert page.eval_on_selector_all(
+        '[data-filter-group="model"] .filter-item', "els => els.length"
+    ) == 16
+
+
+def test_select_none_applies_to_hidden_items_too(page):
+    """Select none covers items hidden by search, not just visible ones."""
+    page.fill('[data-search-for="model"]', "gpt")
+    page.wait_for_timeout(300)
+    page.click('[data-action="none"][data-group="model"]')
+    page.wait_for_timeout(500)
+    summary = page.inner_text("#selection")
+    assert "0 of 16 models" in summary
+    assert page.query_selector(".no-rows") is not None
+
+
+def test_excluding_a_provider_excludes_its_models(page):
+    page.click('[data-filter-group="provider"] .filter-item:first-child input')
+    page.wait_for_timeout(600)
+    blocked = page.eval_on_selector_all(
+        '[data-filter-group="model"] .provider-excluded', "els => els.length"
+    )
+    disabled = page.eval_on_selector_all(
+        '[data-filter-group="model"] input[disabled]', "els => els.length"
+    )
+    assert blocked > 0
+    assert blocked == disabled
+    assert "Excluded by provider" in page.inner_text('[data-filter-group="model"]')
+
+    # Re-including the gateway restores the models the user had chosen.
+    page.click('[data-filter-group="provider"] .filter-item:first-child input')
+    page.wait_for_timeout(500)
+    assert "of 16 models" in page.inner_text("#selection")
+
+
+def test_empty_selection_explains_itself(page):
+    page.click('[data-action="none"][data-group="project"]')
+    page.click('[data-action="none"][data-group="model"]')
+    page.click('[data-action="none"][data-group="provider"]')
+    page.wait_for_timeout(600)
+    note = page.query_selector(".no-rows")
+    assert note is not None
+    assert "Reset filters" in note.inner_text()
+    drawn = page.eval_on_selector_all(
+        ".plot-slot:not([hidden]) .main-svg", "els => els.length"
+    )
+    assert drawn == 0
+
+
+def test_sidebar_collapse_is_remembered(browser, sample_html):
+    context = browser.new_context(viewport={"width": 1440, "height": 1000})
+    handle = context.new_page()
+    handle.goto(sample_html.resolve().as_uri())
+    handle.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
+
+    handle.click("#sidebar-toggle")
+    handle.wait_for_timeout(400)
+    assert "sidebar-collapsed" in handle.get_attribute("#layout", "class")
+    stored = handle.evaluate(
+        '() => window.localStorage.getItem("opencode-dashboard-filters")'
+    )
+    assert stored and '"collapsed":true' in stored
+
+    handle.reload()
+    handle.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
+    assert "sidebar-collapsed" in handle.get_attribute("#layout", "class")
+    # Charts must still size correctly once the sidebar is gone.
+    assert handle.eval_on_selector_all(
+        ".plot-slot:not([hidden]) .main-svg", "els => els.length"
+    ) > 0
+    context.close()
