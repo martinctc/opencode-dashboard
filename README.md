@@ -8,6 +8,17 @@ implementation detail and can change between releases. The exporter validates
 the tables and columns it needs and reports incompatible schemas rather than
 silently producing incomplete data.
 
+## Using GitHub Copilot CLI instead?
+
+This dashboard reads **OpenCode's** local session store. If your usage is
+recorded by **GitHub Copilot CLI**, the equivalent tool for that lives at
+[**github.com/microsoft/ghc-cli-dashboard**](https://github.com/microsoft/ghc-cli-dashboard).
+
+Both are local, read-only and offline. They read different databases, so neither
+can substitute for the other — this one is for OpenCode, that one is for Copilot
+CLI. See [Attribution](#attribution-and-related-projects) for how the two
+relate.
+
 ## Quick start
 
 Requirements: Python 3.9 or later and OpenCode session data on this machine.
@@ -144,21 +155,33 @@ python tools/make_screenshots.py --html sample_dashboard.html --out-dir docs/ima
 Captures each section at desktop and mobile widths. Regenerate after changing
 the dashboard layout. Requires the Playwright install above.
 
-## Attribution
+## Attribution and related projects
 
 This project began as an adaptation of
-[microsoft/ghc-cli-dashboard](https://github.com/microsoft/ghc-cli-dashboard),
-the Copilot CLI usage dashboard, which is also MIT licensed. The two-file
-shape of the tool — a SQLite extractor that writes a CSV, and a renderer that
-turns one or more exports into a self-contained HTML page — comes from there,
-as does the `total_tokens` definition (input plus output, with reasoning and
-cache counters kept separate) and the export/overlap handling.
+[github.com/microsoft/ghc-cli-dashboard](https://github.com/microsoft/ghc-cli-dashboard),
+the Copilot CLI usage dashboard, which is also MIT licensed. The two-file shape
+of the tool — a SQLite extractor that writes a CSV, and a renderer that turns
+one or more exports into a self-contained HTML page — comes from there, as does
+the `total_tokens` definition (input plus output, with reasoning and cache
+counters kept separate) and the export/overlap handling.
 
 Substantial parts of that original remain, including `extract_usage.py`,
 `dashboard.py` and the test suite. This fork changes the data source to
 OpenCode's local store, and replaces the rendering layer, chart palette and
-section layout. Microsoft Corporation's copyright is retained in `LICENSE`
-and in the headers of the derived files, as the MIT licence requires.
+section layout. Microsoft Corporation's copyright is retained in `LICENSE` and
+in the headers of the derived files, as the MIT licence requires.
+
+If you use GitHub Copilot CLI, use
+[microsoft/ghc-cli-dashboard](https://github.com/microsoft/ghc-cli-dashboard)
+instead — it is the maintained upstream tool for that CLI.
+
+### Trademarks
+
+This project may reference trademarks of other projects, products and services.
+Any use of Microsoft trademarks is subject to
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general.aspx),
+and use of Microsoft trademarks or logos here must not imply Microsoft
+sponsorship or endorsement. This is an independent community project.
 
 ## Licence
 
