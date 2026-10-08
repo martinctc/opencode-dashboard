@@ -86,19 +86,28 @@ def build_rows(days: int, seed: int) -> list:
 
     for offset in range(days):
         day = LAST_DAY - timedelta(days=days - 1 - offset)
-        # Real usage drops at weekends; without this the trend chart looks like
-        # a machine rather than a person.
-        weekday_factor = 0.3 if day.weekday() >= 5 else 1.0
+        # Day-level intensity drives the trend chart. Without a smooth factor
+        # each day's total swings by an order of magnitude purely from the
+        # per-row coin flips, which reads as noise rather than as usage.
+        progress = offset / max(days - 1, 1)
+        trend = 0.75 + 0.50 * progress
+        # Real usage drops at weekends; without this the trend looks automated.
+        weekday = 0.45 if day.weekday() >= 5 else 1.0
+        day_scale = trend * weekday * rng.uniform(0.88, 1.12)
 
         for project, project_reach in PROJECTS:
-            if rng.random() > project_reach * 0.8 * weekday_factor:
+            # Presence is decoupled from weight: a busy project shows up on most
+            # days and a quiet one on about half. Tying presence directly to
+            # reach makes quiet days so empty that the daily totals swing by
+            # more than an order of magnitude.
+            if rng.random() > 0.30 + 0.60 * project_reach:
                 continue
             for model, gateway, reach, unit_cost, free in MODELS:
-                if rng.random() > reach * 0.75:
+                if rng.random() > 0.40 + 0.50 * reach:
                     continue
                 session += 1
                 calls = rng.randint(2, 40)
-                scale = project_reach * reach * weekday_factor
+                scale = project_reach * reach * day_scale
 
                 effort = "n/a"
                 if model in EFFORT_MODELS and rng.random() < 0.7:

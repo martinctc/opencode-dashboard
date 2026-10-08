@@ -28,6 +28,42 @@ python extract_usage.py --db "C:\path\to\opencode.db"
 Use `--include-session-title` only when you want free-text session titles in
 the CSV and dashboard. Titles can contain sensitive project or task details.
 
+## Screenshots
+
+All screenshots are generated from synthetic data produced by
+[`tools/make_sample_data.py`](tools/make_sample_data.py) — 90 days, eight
+projects, sixteen models, and a deliberate mix of free and paid models so the
+cost and pricing-efficiency sections have something to rank. **No real usage
+data appears here.**
+
+![Overview: headline metrics, usage and cost over time, and project and model rankings](docs/images/overview-desktop.png)
+
+<details>
+<summary>More screenshots</summary>
+
+Cost and pricing efficiency, shown only when enough models actually carry
+recorded cost:
+
+![Cost by model and pricing efficiency by model](docs/images/cost-desktop.png)
+
+Token categories, provider mix and reasoning effort:
+
+![Token categories, provider mix and reasoning effort](docs/images/composition-desktop.png)
+
+The whole page at mobile width:
+
+![Dashboard at mobile width](docs/images/dashboard-mobile.png)
+
+</details>
+
+Regenerate them after changing the dashboard layout:
+
+```powershell
+python tools/make_sample_data.py --out sample_usage.csv
+python dashboard.py --in sample_usage.csv --out sample_dashboard.html
+python tools/make_screenshots.py --html sample_dashboard.html --out-dir docs/images
+```
+
 ## Metrics
 
 The export uses one row per session, day, provider, model, and variant.
