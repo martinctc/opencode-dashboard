@@ -1,3 +1,9 @@
+---
+layout: default
+title: Compatibility and data format
+nav_order: 2
+---
+
 # Compatibility and data format
 
 ## Database compatibility

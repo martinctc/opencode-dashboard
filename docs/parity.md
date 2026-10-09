@@ -1,11 +1,19 @@
+---
+layout: default
+title: Parity with upstream
+nav_order: 3
+---
+
 # Parity with microsoft/ghc-cli-dashboard
 
 This project is an adaptation of
 [github.com/microsoft/ghc-cli-dashboard](https://github.com/microsoft/ghc-cli-dashboard)
-(see [Attribution](../README.md#attribution-and-related-projects)). That page
+(the Copilot CLI usage dashboard, which is also MIT licensed). That page
 is the maintained tool for GitHub Copilot CLI; this one is the equivalent for
 OpenCode. This file records what the two do not yet agree on, so the gap is
-visible rather than implied.
+visible rather than implied. See
+[Attribution](https://github.com/martinctc/opencode-dashboard#attribution-and-related-projects)
+for how the two relate.
 
 Scoping note: the upstream project targets Copilot CLI's session store. Items
 that depend on data only Copilot CLI records are marked as such and are not
@@ -77,7 +85,10 @@ Ordered roughly by how much it would matter for this data.
 - **Continuous integration.** No workflow runs the suite on push.
 - **`CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`** are
   absent; upstream has all four.
-- **No documentation site.** Upstream publishes to GitHub Pages.
+- **Documentation site.** `_config.yml`, `index.md` and front matter on the
+  guides are in place, using the same `just-the-docs` remote theme as upstream.
+  It publishes documentation only, never a generated dashboard, because those
+  embed source rows.
 
 ### Data this project does not collect
 
