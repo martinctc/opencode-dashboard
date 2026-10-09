@@ -1,0 +1,51 @@
+name: Deploy documentation site to GitHub Pages
+
+# GitHub Pages' legacy builder reports a failed build only as a 404, with the
+# error shown in the repository settings and nowhere queryable. Building through
+# Actions instead surfaces the failure as a normal, readable job log.
+#
+# To use this, set Settings -> Pages -> Source to "GitHub Actions".
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "**.md"
+      - "_config.yml"
+      - ".github/workflows/pages.yml"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it half way.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./
+          destination: ./_site
+
+      - uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
