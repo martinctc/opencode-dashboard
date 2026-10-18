@@ -38,10 +38,10 @@ worth porting unless OpenCode exposes the same thing.
 | Sidebar collapse persisted to localStorage | yes |
 | Synthetic sample data, screenshot tooling, browser tests | yes |
 | Date range presets (7 / 14 / 30 / 90 / All) | yes, anchored to latest export date |
-| Chart metric toggle for model ranking (calls / tokens / cost) | yes, cost gated on paid models |
-| Vendor-level model colouring inferred from the model path | yes, shared across charts |
+| Chart metric toggle for model ranking (tokens / cost) | yes, gated behind MIN_COST_MODELS so free exports show insufficient data |
+| Vendor-level model colouring inferred from the model path | yes, ranking and cache-reuse charts |
 | Cache reuse by model, shown where the data supports a rate | yes, 5-call minimum |
-| Week-over-week KPI deltas against the previous window | yes, finite presets only |
+| Week-over-week KPI deltas against the previous window | yes, finite presets only, suppressed when the previous window is truncated by the earliest export date |
 | Sortable, searchable rows table with CSV download | yes, paginated |
 | Build-time redaction (`--exclude-project`, `--exclude-session-id`) | yes |
 | Export format versioning, legacy loads tolerated | yes, version 1, warns above and on uncertain ordering |
@@ -73,10 +73,6 @@ Ordered roughly by how much it would matter for this data.
 
 - **`CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`** are
   absent; upstream has all four.
-- **Documentation site.** `_config.yml`, `index.md` and front matter on the
-  guides are in place, using the same `just-the-docs` remote theme as upstream.
-  It publishes documentation only, never a generated dashboard, because those
-  embed source rows.
 
 ### Data this project does not collect
 

@@ -1,10 +1,11 @@
+import json
 import re
 import warnings
 
 import pandas as pd
 import pytest
 
-from dashboard import build_dashboard, load_data, main
+from dashboard import build_dashboard, load_data, main, redact_data
 
 
 def sample_data():
@@ -136,3 +137,75 @@ def test_load_data_warns_when_overlap_ordering_is_uncertain(tmp_path):
     # Falls back to file order: "unstamped.csv" sorts last, so it wins.
     assert len(data) == 1
     assert data.iloc[0]["total_tokens"] == 160
+
+
+def _two_row_frame() -> pd.DataFrame:
+    """A two-row frame with distinct project and session ids, complete for load_data."""
+    base = sample_data().copy()
+    frame = pd.concat([base, base], ignore_index=True)
+    frame["variant"] = "high"
+    frame.loc[0, "session_id"] = "alpha"
+    frame.loc[1, "session_id"] = "beta"
+    return frame
+
+
+def test_redact_data_replaces_sessions_with_stable_tokens(tmp_path):
+    """Excluded session ids become stable sequential tokens, regardless of order."""
+    frame = _two_row_frame()
+    frame.to_csv(tmp_path / "src.csv", index=False)
+    data = load_data(str(tmp_path / "src.csv"))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        first = redact_data(data, exclude_session_id=True)
+        second = redact_data(first, exclude_session_id=True)
+
+    assert first["session_id"].nunique() == second["session_id"].nunique()
+    assert len(set(first["session_id"])) == 2
+    for value in first["session_id"]:
+        assert value.startswith("session-")
+
+
+def test_redact_data_drops_excluded_project(tmp_path):
+    """Excluded projects drop their rows and read as '(excluded)'."""
+    frame = _two_row_frame()
+    frame["project"] = "proj-redact"
+    frame.to_csv(tmp_path / "src.csv", index=False)
+    data = load_data(str(tmp_path / "src.csv"))
+
+    redacted = redact_data(data, exclude_project=True)
+
+    assert set(redacted["project"]) == {"(excluded)"}
+    assert all(redacted["project"] == "(excluded)")
+
+
+def test_build_dashboard_redaction_leaves_no_original_identifiers(tmp_path):
+    """The generated HTML carries neither excluded project names nor raw session ids."""
+    frame = _two_row_frame()
+    frame["project"] = "proj-redact"
+    frame.to_csv(tmp_path / "src.csv", index=False)
+    data = load_data(str(tmp_path / "src.csv"))
+
+    html = tmp_path / "out.html"
+    build_dashboard(
+        data,
+        html,
+        exclude_project=True,
+        exclude_session_id=True,
+    )
+    content = html.read_text(encoding="utf-8")
+
+    # the project name never reaches the page at all
+    assert "proj-redact" not in content
+
+    # session ids are relabelled before embedding, so the originals never enter the
+    # embedded rows JSON - only the stable tokens do. Searching for the quoted
+    # values ("project":"(excluded)" and "session_id":"...") matches our data only;
+    # Plotly's own code does not use those keys, so bare "alpha"/"beta" would match
+    # Plotly internals and give a false positive.
+    assert content.count('"project":"(excluded)"') == len(data)
+    assert '"session_id":"alpha"' not in content
+    assert '"session_id":"beta"' not in content
+    # the relabelled ids are present and stable across the payload
+    assert '"session-0"' in content
+    assert '"session-1"' in content

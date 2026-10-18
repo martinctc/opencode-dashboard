@@ -380,6 +380,11 @@ body {
   background: var(--accent); color: #ffffff;
 }
 .seg-group button:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: -2px; }
+/* Shown next to "Rank by" when Cost is selected but too little priced usage
+   exists to rank by it, so the pressed Cost button is not read as applied. */
+.seg-note {
+  font-size: 12px; color: var(--muted); margin-left: 10px; max-width: 320px;
+}
 /* Period-over-period delta shown on a KPI card. */
 .delta { font-size: 12px; font-weight: 650; margin-top: 6px; }
 .delta.up { color: var(--good); }
@@ -881,8 +886,12 @@ CLIENT_JS = r"""
   }
 
   // The window immediately before the selected range, for period-over-period
-  // deltas. Returns [start, end] inclusive, or null when there is no previous
-  // window to compare against (all time, or a single-day range).
+  // deltas. Returns [start, end] inclusive, or null when there is no window of
+  // the same length to compare against: all time, or a preset whose previous
+  // window would reach past the earliest date in the data. A full window
+  // compared against a shorter one inflates the percentage by the length
+  // difference alone, so the badge is suppressed rather than shown with a
+  // caveat the reader would have to remember when comparing cards.
   function previousWindow() {
     var start = dateCutoff();
     if (start === null) { return null; }
@@ -892,12 +901,10 @@ CLIENT_JS = r"""
     var span = endMs - startMs + 86400000;
     var prevEndMs = startMs - 86400000;
     var prevStartMs = prevEndMs - span + 86400000;
-    // Clamp to the earliest date actually present; a window that starts before
-    // the data simply compares against a shorter previous period.
     var first = earliestDate();
     if (first) {
       var firstMs = Date.parse(first + "T00:00:00Z");
-      if (prevStartMs < firstMs) { prevStartMs = firstMs; }
+      if (prevStartMs < firstMs) { return null; }
     }
     if (prevEndMs < prevStartMs) { return null; }
     return [
@@ -987,6 +994,16 @@ CLIENT_JS = r"""
         });
         setDatePreset(CFG.defaultDatePreset);
         setMetric("tokens");
+        // The rows table keeps its own search/sort/page, which are not part of
+        // the persisted filter state - so a reset that left them in place could
+        // still show "No rows match this search" right after clearing every
+        // other filter.
+        rowsState.search = "";
+        rowsState.sortKey = "date";
+        rowsState.sortDir = "desc";
+        rowsState.page = 0;
+        var rowsBox = document.getElementById("rows-search");
+        if (rowsBox) { rowsBox.value = ""; }
         storageSave();
         refresh();
       });
@@ -1713,13 +1730,21 @@ CLIENT_JS = r"""
   }
 
   // Rows narrowed by the table's own search box, across every visible column.
+  // Both the raw value and the rendered one are matched: the numbers that reach
+  // the CSV download are the raw ones, so a figure copied from the CSV should
+  // find its row here, while a reader who types the grouped or abbreviated form
+  // they see on screen should find it too.
   function searchedRows() {
     var needle = rowsState.search;
     if (!needle) { return state.rows; }
     return state.rows.filter(function (row) {
       for (var i = 0; i < ROW_COLUMNS.length; i++) {
-        var value = rowsCell(ROW_COLUMNS[i], row);
-        if (value.toLowerCase().indexOf(needle) !== -1) { return true; }
+        var col = ROW_COLUMNS[i];
+        var shown = rowsCell(col, row);
+        if (shown.toLowerCase().indexOf(needle) !== -1) { return true; }
+        var raw = row[col.key];
+        if (raw === undefined || raw === null) { continue; }
+        if (String(raw).toLowerCase().indexOf(needle) !== -1) { return true; }
       }
       return false;
     });
@@ -1809,7 +1834,13 @@ CLIENT_JS = r"""
         var raw = row[col.key];
         if (raw === undefined || raw === null) { return ""; }
         var text = String(raw);
-        // Quote when the value could be mistaken for a delimiter or formula.
+        // A leading =, +, - or @ makes a spreadsheet treat the cell as a
+        // formula, and quoting does not stop that - the sheet still evaluates
+        // it. Prefix those values with a single quote so the text survives a
+        // round trip through Excel or Sheets. None of our numeric columns can
+        // be negative (load_data rejects that), so a leading - here is always
+        // text that happens to start with a dash.
+        if (/^[=+\-@\t\r]/.test(text)) { text = "'" + text; }
         return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
       }).join(","));
     });
@@ -1874,6 +1905,22 @@ CLIENT_JS = r"""
     renderRows();
   }
 
+  // The Cost button can stay pressed while the paid-model gate suppresses the
+  // cost ranking (too few priced rows), so the button is not read as applied.
+  // The notice sits on the toolbar next to the button, not down in the charts.
+  function syncMetricNotice(d) {
+    var notice = $("metric-notice");
+    if (!notice) { return; }
+    if (state.metric === "cost" && !hasMetricData(d)) {
+      notice.textContent = "Not enough priced usage to rank by cost - " +
+        "showing tokens instead.";
+      notice.hidden = false;
+    } else {
+      notice.hidden = true;
+      notice.textContent = "";
+    }
+  }
+
   function render() {
     var d = aggregate(state.rows);
 
@@ -1881,6 +1928,7 @@ CLIENT_JS = r"""
     $("subtitle").innerHTML = subtitleHtml(d);
     $("insights").innerHTML = insightHtml(d);
     $("footer-notes").innerHTML = footerHtml(d);
+    syncMetricNotice(d);
     // The rows table renders on every path, empty or not: it carries its own
     // empty state rather than disappearing with the charts.
     renderRows();
@@ -2104,7 +2152,8 @@ def _toolbar_html() -> str:
         '<div class="seg"><span class="seg-label">Date range</span>'
         f'<div class="seg-group" role="group" aria-label="Date range">{date_buttons}</div></div>'
         '<div class="seg"><span class="seg-label">Rank by</span>'
-        f'<div class="seg-group" role="group" aria-label="Ranking metric">{metric_buttons}</div></div>'
+        f'<div class="seg-group" role="group" aria-label="Ranking metric">{metric_buttons}</div>'
+        '<span class="seg-note" id="metric-notice" hidden></span></div>'
         "</div>"
     )
 
@@ -2191,7 +2240,7 @@ def build_dashboard(
             body = (
                 '<div class="rows-controls">'
                 '<input class="rows-search" type="search" id="rows-search"'
-                ' placeholder="Search all columns..." data-rows-search'
+                ' placeholder="Search all columns..."'
                 ' autocomplete="off" aria-label="Search rows">'
                 '<span class="rows-meta" id="rows-meta"></span>'
                 '<button type="button" class="rows-download" id="rows-download">'
