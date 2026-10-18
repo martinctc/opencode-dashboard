@@ -37,6 +37,16 @@ worth porting unless OpenCode exposes the same thing.
 | Provider exclusion cascading to its models | yes |
 | Sidebar collapse persisted to localStorage | yes |
 | Synthetic sample data, screenshot tooling, browser tests | yes |
+| Date range presets (7 / 14 / 30 / 90 / All) | yes, anchored to latest export date |
+| Chart metric toggle for model ranking (calls / tokens / cost) | yes, cost gated on paid models |
+| Vendor-level model colouring inferred from the model path | yes, shared across charts |
+| Cache reuse by model, shown where the data supports a rate | yes, 5-call minimum |
+| Week-over-week KPI deltas against the previous window | yes, finite presets only |
+| Sortable, searchable rows table with CSV download | yes, paginated |
+| Build-time redaction (`--exclude-project`, `--exclude-session-id`) | yes |
+| Export format versioning, legacy loads tolerated | yes, version 1, warns above and on uncertain ordering |
+| Continuous integration on push | yes, unit + browser jobs |
+| GitHub Pages documentation site | yes, docs only, never a generated dashboard |
 
 ## Not yet done
 
@@ -44,45 +54,23 @@ Ordered roughly by how much it would matter for this data.
 
 ### Interaction
 
-- **Chart metric toggle** (Tokens / Estimated cost). Every chart would need the
-  other value column, its formatter and its axis title. Currently worth little:
-  exports are almost entirely free tier, so the cost view is near-empty. It
-  becomes valuable once paid models are in use.
-- **Date range presets** (7 / 14 / 30 / 90 days / All time), computed relative
-  to the latest date in the loaded exports rather than today. Low value at six
-  days of history, useful on a longer export.
-- **Trend granularity toggle** (Day / Week / Month). Depends on the above.
-- **Sortable, filterable rows table** over the embedded rows, and a CSV
-  download. The rows are already in the page, so this is mostly table plumbing.
+- **Trend granularity toggle** (Day / Week / Month). The other interaction items
+  are done; this one still needs the trend chart to aggregate on the client and
+  re-derive its axis ticks.
 
 ### Classification
 
-- **Vendor-level model colouring.** Upstream infers a vendor from the model
-  name prefix (`claude*` -> Anthropic, `gpt*` -> OpenAI, and so on) and colours
-  models by vendor, shared across the ranking, efficiency and mix charts. Here
-  the `provider` column is a routing gateway (`openrouter`, `opencode`,
-  `azure`), and the real vendor sits inside the model string
-  (`openrouter/google/gemma-4-31b-it`). Deciding between colouring by gateway
-  (honest to the data, four colours) and inferring a vendor from the model path
-  (better looking, needs its own mapping table) is still open. Doing it before
-  chart code moves around again is cheapest.
+- Nothing outstanding. Vendor colouring is inferred from the model path, with
+  the gateway `provider` column kept separate as the honest grouping key in the
+  filters.
 
 ### Publishing and sharing
 
-- **Build-time redaction.** Upstream's `dashboard.py` accepts
-  `--exclude-project`, `--omit-task-summaries`, `--exclude-default` and
-  `--exclude-default-models`, so a dashboard can be stripped before sharing.
-  Here the only lever is `--include-session-title` at extract time, which is
-  opt-in but cannot remove content afterwards. The generated HTML embeds its
-  source rows either way, so this matters to anyone sharing a file.
-- **Export format versioning.** Upstream tracks format versions 1-3 and still
-  loads legacy exports that predate `exported_at` / `export_format_version`,
-  warning when ordering is uncertain. This project writes version 1 and assumes
-  the metadata columns exist.
+- Nothing outstanding for sharing a file. Redaction happens at build time and
+  the redacted rows never enter the HTML payload.
 
 ### Repository
 
-- **Continuous integration.** No workflow runs the suite on push.
 - **`CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`** are
   absent; upstream has all four.
 - **Documentation site.** `_config.yml`, `index.md` and front matter on the
