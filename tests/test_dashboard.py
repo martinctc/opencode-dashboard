@@ -1,4 +1,5 @@
 import re
+import warnings
 
 import pandas as pd
 import pytest
@@ -82,5 +83,56 @@ def test_load_data_keeps_latest_overlapping_export(tmp_path):
     with pytest.warns(RuntimeWarning, match="overlapping export"):
         data = load_data(str(tmp_path / "*.csv"))
 
+    assert len(data) == 1
+    assert data.iloc[0]["total_tokens"] == 160
+
+
+def test_load_data_reads_export_without_metadata(tmp_path):
+    """Exports predating versioning have no exported_at or version column.
+
+    They are the reason export metadata is not a required column: failing here
+    would lock the dashboard out of its own earlier files.
+    """
+    legacy = sample_data()
+    legacy["variant"] = "high"
+    legacy = legacy.drop(columns=["exported_at"], errors="ignore")
+    legacy.to_csv(tmp_path / "legacy.csv", index=False)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        data = load_data(str(tmp_path / "legacy.csv"))
+
+    assert len(data) == 1
+    assert data["exported_at"].isna().all()
+
+
+def test_load_data_warns_on_newer_export_format(tmp_path):
+    """A newer format may add columns this build never sees, so say so."""
+    future = sample_data()
+    future["variant"] = "high"
+    future["exported_at"] = "2026-10-06T10:00:00+00:00"
+    future["export_format_version"] = "99"
+    future.to_csv(tmp_path / "future.csv", index=False)
+
+    with pytest.warns(RuntimeWarning, match="export format 99"):
+        load_data(str(tmp_path / "future.csv"))
+
+
+def test_load_data_warns_when_overlap_ordering_is_uncertain(tmp_path):
+    """Without timestamps there is no principled 'latest', so the file-order
+    fallback must not be implied to be timestamp-based."""
+    stamped = sample_data()
+    stamped["variant"] = "high"
+    stamped["exported_at"] = "2026-10-06T10:00:00+00:00"
+    unstamped = stamped.copy()
+    unstamped["total_tokens"] = 160
+    unstamped = unstamped.drop(columns=["exported_at"])
+    stamped.to_csv(tmp_path / "stamped.csv", index=False)
+    unstamped.to_csv(tmp_path / "unstamped.csv", index=False)
+
+    with pytest.warns(RuntimeWarning, match="no export timestamp"):
+        data = load_data(str(tmp_path / "*.csv"))
+
+    # Falls back to file order: "unstamped.csv" sorts last, so it wins.
     assert len(data) == 1
     assert data.iloc[0]["total_tokens"] == 160

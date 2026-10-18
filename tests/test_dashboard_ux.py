@@ -15,6 +15,7 @@ browser, is unavailable, so the suite still runs in a bare environment:
 import importlib.util
 import sys
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -247,7 +248,7 @@ def test_page_loads_without_external_requests(browser, sample_html):
     """
     context = browser.new_context(viewport={"width": 1280, "height": 900})
     handle = context.new_page()
-    external: list[str] = []
+    external: List[str] = []
     handle.on(
         "request",
         lambda request: external.append(request.url)
