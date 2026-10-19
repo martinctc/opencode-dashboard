@@ -22,12 +22,20 @@ from plotly.offline import get_plotlyjs
 from plotly.utils import PlotlyJSONEncoder
 
 
+# Columns every export must carry. Export metadata is deliberately absent:
+# exports written before versioning existed have neither `exported_at` nor
+# `export_format_version`, and are still loadable (see load_data).
 REQUIRED_COLUMNS = {
     "user", "date", "project", "provider", "model", "calls",
     "input_tokens", "output_tokens", "cache_read_tokens",
     "cache_write_tokens", "reasoning_tokens", "total_tokens", "cost_usd",
-    "variant", "session_id", "exported_at",
+    "variant", "session_id",
 }
+
+# The newest export format this dashboard understands. An export from a later
+# format may carry columns that are read as absent here, so it is reported
+# rather than silently rendered as if it were this version.
+CURRENT_EXPORT_FORMAT_VERSION = 1
 NUMERIC_COLUMNS = (
     "calls", "total_tokens", "input_tokens", "output_tokens",
     "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "cost_usd",
@@ -54,6 +62,21 @@ LABEL_HEADROOM = 0.18
 # it can actually prove instead.
 MIN_COST_MODELS = 2
 MIN_CALLS_FOR_EFFICIENCY = 5
+
+# Cache reuse is a ratio, so one model could in principle carry it; but a model
+# seen on a couple of calls tells you nothing stable about its cache behaviour.
+MIN_CALLS_FOR_CACHE_REUSE = 5
+
+# Date-range presets offered in the toolbar. Ranges are relative to the latest
+# date in the loaded exports, not to today, so a stale CSV still reads sensibly.
+DATE_PRESETS = [
+    ("7", "7 days"),
+    ("14", "14 days"),
+    ("30", "30 days"),
+    ("90", "90 days"),
+    ("all", "All time"),
+]
+DEFAULT_DATE_PRESET = "all"
 
 # Viridis samples for ordered levels: reasoning effort runs purple (low) to
 # yellow (high). Unrecorded effort is grey so it reads as a catch-all.
@@ -128,6 +151,72 @@ def provider_colors(providers) -> dict:
         name: CATEGORICAL_COLORS[index % len(CATEGORICAL_COLORS)]
         for index, name in enumerate(sorted(providers))
     }
+
+
+# The provider column is a routing gateway (openrouter, azure, opencode), not the
+# company whose model answered. The real vendor sits inside the model path: an
+# openrouter row is `openrouter/<vendor>/<model>`, an azure row names the vendor
+# in the deployment. Charting by gateway collapses Google, Anthropic and OpenAI
+# into one "openrouter" slice, so the ranking and efficiency charts infer a
+# vendor from the model string instead. Where no vendor can be inferred the
+# gateway is used, which is honest to the data rather than a guess.
+VENDOR_PREFIXES = (
+    ("claude", "Anthropic"), ("anthropic", "Anthropic"),
+    ("gpt", "OpenAI"), ("openai", "OpenAI"), ("o1", "OpenAI"),
+    ("o3", "OpenAI"), ("o4", "OpenAI"),
+    ("gemini", "Google"), ("gemma", "Google"), ("google", "Google"),
+    ("deepseek", "DeepSeek"),
+    ("llama", "Meta"), ("meta", "Meta"),
+    ("mistral", "Mistral"), ("codestral", "Mistral"),
+    ("qwen", "Alibaba"), ("qwq", "Alibaba"),
+    ("nemotron", "NVIDIA"), ("nvidia", "NVIDIA"),
+    ("grok", "xAI"), ("xai", "xAI"),
+    ("command", "Cohere"), ("cohere", "Cohere"),
+)
+
+
+def infer_vendor(model: str, gateway: str) -> str:
+    """Best-effort vendor for a `gateway/model` string.
+
+    `openrouter/google/gemma-4-31b-it` -> Google (vendor is the path segment
+    after the gateway). `azure/DeepSeek-V3.2` -> DeepSeek (matched on the model
+    name). Anything unrecognised falls back to the gateway, which is truthful
+    about what the export actually recorded.
+    """
+    remainder = model.split("/", 1)[1] if "/" in model else model
+    head = remainder.split("/", 1)[0]
+    lower_head = head.lower()
+    # A path segment that is itself a vendor name is authoritative.
+    if "/" in remainder:
+        for prefix, vendor in VENDOR_PREFIXES:
+            if lower_head == prefix.lower() or lower_head.startswith(prefix.lower()):
+                return vendor
+    # Otherwise match a known vendor anywhere in the leading model name.
+    for prefix, vendor in VENDOR_PREFIXES:
+        if lower_head.startswith(prefix.lower()) or (
+            len(lower_head) > 3 and prefix.lower() in lower_head
+        ):
+            return vendor
+    return gateway
+
+
+def vendor_colors(data: pd.DataFrame) -> tuple:
+    """Map each model to a vendor, and each vendor to a stable hue.
+
+    Returns `(model_to_vendor, vendor_palette)`. Colour is keyed by vendor name
+    in alphabetical order so a vendor keeps its hue when the selection changes,
+    matching how provider colours are assigned.
+    """
+    model_to_vendor = {
+        row.model: infer_vendor(row.model, row.provider)
+        for row in data.itertuples()
+    }
+    vendors = sorted(set(model_to_vendor.values()))
+    palette = {
+        name: CATEGORICAL_COLORS[index % len(CATEGORICAL_COLORS)]
+        for index, name in enumerate(vendors)
+    }
+    return model_to_vendor, palette
 
 
 def plotly_template() -> str:
@@ -267,6 +356,87 @@ body {
 .filter-actions.top button {
   padding: 6px 12px; font-size: 12.5px;
 }
+/* Toolbar: date-range presets and the ranking metric, each a segmented group. */
+.toolbar {
+  display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+  margin: 0 0 10px;
+}
+.seg { display: inline-flex; align-items: center; gap: 0; }
+.seg-label {
+  font-size: 12.5px; color: var(--muted); font-weight: 600; margin-right: 8px;
+}
+.seg-group {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; background: var(--card-bg);
+}
+.seg-group button {
+  border: 0; background: transparent; cursor: pointer; font: inherit;
+  font-size: 12.5px; font-weight: 600; color: var(--muted);
+  padding: 7px 12px; min-height: 36px; transition: background 0.15s;
+}
+.seg-group button + button { border-left: 1px solid var(--border); }
+.seg-group button:hover { background: var(--surface); color: var(--text); }
+.seg-group button[aria-pressed="true"] {
+  background: var(--accent); color: #ffffff;
+}
+.seg-group button:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: -2px; }
+/* Shown next to "Rank by" when Cost is selected but too little priced usage
+   exists to rank by it, so the pressed Cost button is not read as applied. */
+.seg-note {
+  font-size: 12px; color: var(--muted); margin-left: 10px; max-width: 320px;
+}
+/* Period-over-period delta shown on a KPI card. */
+.delta { font-size: 12px; font-weight: 650; margin-top: 6px; }
+.delta.up { color: var(--good); }
+.delta.down { color: var(--warn); }
+.delta.flat, .delta.na { color: var(--muted); font-weight: 600; }
+.delta-note { color: var(--muted); font-weight: 400; }
+/* Rows table: a filterable, sortable view over the embedded export rows. */
+.rows-controls {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  margin: 0 0 12px;
+}
+.rows-search {
+  flex: 1 1 240px; min-width: 180px; padding: 7px 9px;
+  border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 13px;
+}
+.rows-download {
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 12px;
+}
+.rows-download:hover { background: var(--surface-hover); }
+.rows-meta { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rows-scroll {
+  overflow-x: auto; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card-bg);
+}
+.rows-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.rows-table th, .rows-table td {
+  padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.rows-table thead th {
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+  font-weight: 650; color: var(--muted); user-select: none;
+}
+.rows-table th[data-sort] { cursor: pointer; }
+.rows-table th[data-sort]:hover { color: var(--text); }
+.rows-table th[aria-sort]:not([aria-sort="none"]) { color: var(--accent-dark); }
+.rows-table th:focus-visible { outline: 2px solid var(--accent-dark); outline-offset: -2px; }
+.rows-table tbody tr:last-child td { border-bottom: 0; }
+.rows-table tbody tr:hover { background: var(--surface); }
+.rows-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.rows-empty { color: var(--muted); text-align: center; padding: 18px; }
+.rows-pager {
+  display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; margin-top: 10px;
+}
+.rows-pager button {
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px;
+}
+.rows-pager button:hover:not(:disabled) { background: var(--surface-hover); }
+.rows-pager button:disabled { opacity: 0.5; cursor: not-allowed; }
 .no-rows {
   font-size: 13px; color: var(--muted); background: var(--card-bg);
   border: 1px solid var(--border); border-radius: 10px; padding: 14px;
@@ -375,6 +545,10 @@ SECTIONS = [
     ("sec-composition", "Composition",
      "Which token categories make up the recorded usage, how it splits across "
      "the providers that served it, and which reasoning effort was configured."),
+    ("sec-rows", "Rows",
+     "The individual export rows behind every chart above, under the same "
+     "filters. Sort any column, search across all of them, or download the "
+     "current selection as CSV."),
 ]
 
 
@@ -391,11 +565,17 @@ def load_data(pattern: str) -> pd.DataFrame:
         if missing:
             raise ValueError(f"{path} is missing required columns: {', '.join(missing)}")
         frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.date
-        frame["exported_at"] = pd.to_datetime(
-            frame["exported_at"], errors="raise", utc=True
-        )
-        if frame["exported_at"].isna().any():
-            raise ValueError(f"{path} has a missing export timestamp")
+        # Export metadata is optional: exports written before this project
+        # tracked versions carry neither column and are still loadable.
+        if "exported_at" in frame.columns:
+            frame["exported_at"] = pd.to_datetime(
+                frame["exported_at"], errors="raise", utc=True
+            )
+            if frame["exported_at"].isna().any():
+                raise ValueError(f"{path} has a missing export timestamp")
+        else:
+            frame["exported_at"] = pd.NaT
+        _warn_on_export_version(frame, path)
         missing_session = (
             frame["session_id"].isna()
             | frame["session_id"].astype(str).str.strip().eq("")
@@ -424,11 +604,65 @@ def load_data(pattern: str) -> pd.DataFrame:
             "export for each session, date, provider, model, and variant.",
             RuntimeWarning,
         )
-        data = (
-            data.sort_values("exported_at", kind="stable")
-            .drop_duplicates(identity, keep="last")
-        )
+        if data["exported_at"].notna().all():
+            data = (
+                data.sort_values("exported_at", kind="stable")
+                .drop_duplicates(identity, keep="last")
+            )
+        else:
+            # Without timestamps there is no principled "latest". Files are
+            # loaded in sorted path order, which for date-suffixed exports is
+            # chronological, so the last row seen wins - but say so rather than
+            # implying the timestamps agreed.
+            warnings.warn(
+                "Some exports carry no export timestamp, so which overlapping "
+                "row is newest cannot be determined; keeping the last row in "
+                "file order instead.",
+                RuntimeWarning,
+            )
+            data = data.drop_duplicates(identity, keep="last")
     return data
+
+
+def _warn_on_export_version(frame: pd.DataFrame, path: Path) -> None:
+    """Report an export written in a format this dashboard does not know.
+
+    A missing version column means the export predates versioning, which is
+    expected and loads normally. A *newer* version means the file may carry
+    columns this build never sees, so rendering it as if it were version 1
+    would misrepresent the data.
+    """
+    if "export_format_version" not in frame.columns:
+        return
+    raw = frame["export_format_version"].dropna().astype(str).str.strip()
+    raw = raw[raw.ne("")]
+    if raw.empty:
+        return
+    versions = set(raw)
+    if len(versions) > 1:
+        warnings.warn(
+            f"{path} mixes export format versions "
+            f"({', '.join(sorted(versions))}); reading all rows as "
+            f"version {CURRENT_EXPORT_FORMAT_VERSION}.",
+            RuntimeWarning,
+        )
+        versions = {str(CURRENT_EXPORT_FORMAT_VERSION)}
+    for value in sorted(versions):
+        if not value.lstrip("-").isdigit():
+            warnings.warn(
+                f"{path} has an unreadable export format version {value!r}; "
+                "reading its rows as if they were version "
+                f"{CURRENT_EXPORT_FORMAT_VERSION}.",
+                RuntimeWarning,
+            )
+            continue
+        if int(value) > CURRENT_EXPORT_FORMAT_VERSION:
+            warnings.warn(
+                f"{path} was written in export format {value}, newer than the "
+                f"version {CURRENT_EXPORT_FORMAT_VERSION} this dashboard "
+                "understands; any columns it adds will be ignored.",
+                RuntimeWarning,
+            )
 
 
 def _fmt_tokens(value: float) -> str:
@@ -506,7 +740,9 @@ CLIENT_JS = r"""
     allRows: D.rows,
     excluded: { project: [], model: [], provider: [] },
     limit: { project: CFG.filterPage, model: CFG.filterPage, provider: CFG.filterPage },
-    search: { project: "", model: "", provider: "" }
+    search: { project: "", model: "", provider: "" },
+    datePreset: CFG.defaultDatePreset,
+    metric: "tokens"
   };
 
   var STORAGE_KEY = "opencode-dashboard-filters";
@@ -525,6 +761,8 @@ CLIENT_JS = r"""
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
         excluded: state.excluded,
+        datePreset: state.datePreset,
+        metric: state.metric,
         collapsed: document.getElementById("layout").classList
           .contains("sidebar-collapsed")
       }));
@@ -614,14 +852,95 @@ CLIENT_JS = r"""
     var projects = excludedSet("project");
     var models = excludedSet("model");
     var providers = excludedSet("provider");
+    var cutoff = dateCutoff();
     state.rows = state.allRows.filter(function (r) {
-      return !projects.has(r.project) && !models.has(r.model) &&
-             !providers.has(r.provider);
+      if (projects.has(r.project) || models.has(r.model) ||
+          providers.has(r.provider)) { return false; }
+      // Date presets are anchored to the latest date in the exports, not to
+      // today, so a stale CSV still reads as a complete window.
+      return cutoff === null || r.date >= cutoff;
     });
+  }
+
+  // The latest date present in the data, as a "YYYY-MM-DD" string. Used as the
+  // anchor for date-range presets and for period-over-period deltas.
+  function latestDate() {
+    var best = "";
+    for (var i = 0; i < D.rows.length; i++) {
+      if (D.rows[i].date > best) { best = D.rows[i].date; }
+    }
+    return best;
+  }
+
+  // Inclusive "YYYY-MM-DD" cutoff for the selected preset, or null for all time.
+  function dateCutoff() {
+    var preset = state.datePreset;
+    if (!preset || preset === "all") { return null; }
+    var days = parseInt(preset, 10);
+    if (!days || days <= 0) { return null; }
+    var end = latestDate();
+    if (!end) { return null; }
+    var endMs = Date.parse(end + "T00:00:00Z");
+    var startMs = endMs - (days - 1) * 86400000;
+    return new Date(startMs).toISOString().slice(0, 10);
+  }
+
+  // The window immediately before the selected range, for period-over-period
+  // deltas. Returns [start, end] inclusive, or null when there is no window of
+  // the same length to compare against: all time, or a preset whose previous
+  // window would reach past the earliest date in the data. A full window
+  // compared against a shorter one inflates the percentage by the length
+  // difference alone, so the badge is suppressed rather than shown with a
+  // caveat the reader would have to remember when comparing cards.
+  function previousWindow() {
+    var start = dateCutoff();
+    if (start === null) { return null; }
+    var end = latestDate();
+    var startMs = Date.parse(start + "T00:00:00Z");
+    var endMs = Date.parse(end + "T00:00:00Z");
+    var span = endMs - startMs + 86400000;
+    var prevEndMs = startMs - 86400000;
+    var prevStartMs = prevEndMs - span + 86400000;
+    var first = earliestDate();
+    if (first) {
+      var firstMs = Date.parse(first + "T00:00:00Z");
+      if (prevStartMs < firstMs) { return null; }
+    }
+    if (prevEndMs < prevStartMs) { return null; }
+    return [
+      new Date(prevStartMs).toISOString().slice(0, 10),
+      new Date(prevEndMs).toISOString().slice(0, 10)
+    ];
+  }
+
+  function earliestDate() {
+    var best = "";
+    for (var i = 0; i < D.rows.length; i++) {
+      if (!best || D.rows[i].date < best) { best = D.rows[i].date; }
+    }
+    return best;
   }
 
   function setExcluded(group, names) {
     state.excluded[group] = names;
+  }
+
+  // Update a segmented control's pressed state to match the model.
+  function syncSeg(attr, value) {
+    document.querySelectorAll("[" + attr + "]").forEach(function (button) {
+      button.setAttribute("aria-pressed",
+        button.getAttribute(attr) === value ? "true" : "false");
+    });
+  }
+
+  function setDatePreset(preset) {
+    state.datePreset = preset || CFG.defaultDatePreset;
+    syncSeg("data-date-preset", state.datePreset);
+  }
+
+  function setMetric(metric) {
+    state.metric = metric === "cost" ? "cost" : "tokens";
+    syncSeg("data-metric", state.metric);
   }
 
   function selectionHtml(d) {
@@ -673,10 +992,39 @@ CLIENT_JS = r"""
           var box = document.querySelector('[data-search-for="' + g + '"]');
           if (box) { box.value = ""; }
         });
+        setDatePreset(CFG.defaultDatePreset);
+        setMetric("tokens");
+        // The rows table keeps its own search/sort/page, which are not part of
+        // the persisted filter state - so a reset that left them in place could
+        // still show "No rows match this search" right after clearing every
+        // other filter.
+        rowsState.search = "";
+        rowsState.sortKey = "date";
+        rowsState.sortDir = "desc";
+        rowsState.page = 0;
+        var rowsBox = document.getElementById("rows-search");
+        if (rowsBox) { rowsBox.value = ""; }
         storageSave();
         refresh();
       });
     }
+
+    // Date-range presets and the ranking metric are segmented button groups;
+    // both re-render on click and persist across reloads.
+    document.querySelectorAll("[data-date-preset]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        setDatePreset(button.getAttribute("data-date-preset"));
+        storageSave();
+        refresh();
+      });
+    });
+    document.querySelectorAll("[data-metric]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        setMetric(button.getAttribute("data-metric"));
+        storageSave();
+        refresh();
+      });
+    });
 
     FILTER_ORDER.forEach(function (group) {
       var search = document.querySelector('[data-search-for="' + group + '"]');
@@ -888,19 +1236,79 @@ CLIENT_JS = r"""
     return colors;
   }
 
+  // Aggregate only the rows falling in [start, end], using the same facet
+  // exclusions already applied to state.rows, so a delta compares like with
+  // like rather than against an unfiltered baseline.
+  function totalsInWindow(start, end) {
+    var projects = excludedSet("project");
+    var models = excludedSet("model");
+    var providers = excludedSet("provider");
+    var out = { tokens: 0, cost: 0, calls: 0, cacheRead: 0, sessions: 0 };
+    var seen = new Set();
+    for (var i = 0; i < D.rows.length; i++) {
+      var r = D.rows[i];
+      if (projects.has(r.project) || models.has(r.model) ||
+          providers.has(r.provider)) { continue; }
+      if (r.date < start || r.date > end) { continue; }
+      out.tokens += r.total_tokens;
+      out.cost += r.cost_usd;
+      out.calls += r.calls;
+      out.cacheRead += r.cache_read_tokens;
+      seen.add(r.session_id);
+    }
+    out.sessions = seen.size;
+    return out;
+  }
+
+  // A period-over-period change, or null when there is nothing to compare (no
+  // previous window, or a zero baseline, which has no defined percentage).
+  function deltaOf(current, previous) {
+    if (previous === null || previous === undefined || previous === 0) {
+      return null;
+    }
+    return (current - previous) / previous;
+  }
+
+  function deltaHtml(delta) {
+    if (delta === null) {
+      return "";
+    }
+    var pct = Math.abs(delta * 100);
+    if (pct < 0.05) {
+      return '<div class="delta flat">no change' +
+        '<span class="delta-note"> vs previous period</span></div>';
+    }
+    var up = delta > 0;
+    var cls = up ? "up" : "down";
+    var arrow = up ? "&#9650;" : "&#9660;";
+    return '<div class="delta ' + cls + '">' + arrow + " " + pct.toFixed(0) +
+      "%<span class=\"delta-note\"> vs previous period</span></div>";
+  }
+
   function kpiHtml(d) {
+    var prev = null;
+    var win = previousWindow();
+    if (win) { prev = totalsInWindow(win[0], win[1]); }
+    var deltas = prev ? {
+      tokens: deltaOf(d.totals.tokens, prev.tokens),
+      cost: deltaOf(d.totals.cost, prev.cost),
+      calls: deltaOf(d.totals.calls, prev.calls),
+      sessions: deltaOf(d.sessions, prev.sessions),
+      cacheRead: deltaOf(d.totals.cacheRead, prev.cacheRead)
+    } : null;
     var items = [
-      ["Input + output tokens", group(d.totals.tokens), null],
+      ["Input + output tokens", group(d.totals.tokens), null, "tokens"],
       ["Recorded cost (USD)", fmtCost(d.totals.cost),
-       "Reported by OpenCode, not an invoice"],
-      ["Assistant messages", group(d.totals.calls), null],
-      ["Sessions", group(d.sessions), null],
+       "Reported by OpenCode, not an invoice", "cost"],
+      ["Assistant messages", group(d.totals.calls), null, "calls"],
+      ["Sessions", group(d.sessions), null, "sessions"],
       ["Cache read tokens", group(d.totals.cacheRead),
-       "Independent counter, not part of the total above"]
+       "Independent counter, not part of the total above", "cacheRead"]
     ];
     return items.map(function (item) {
+      var badge = deltas ? deltaHtml(deltas[item[3]]) : "";
       return '<div class="kpi"><div class="kpi-label">' + esc(item[0]) +
-        '</div><div class="kpi-value">' + esc(item[1]) + "</div>" +
+        '</div><div class="kpi-value">' + esc(item[1]) + "</div>" + badge +
         (item[2] ? '<div class="kpi-note">' + esc(item[2]) + "</div>" : "") +
         "</div>";
     }).join("");
@@ -1000,29 +1408,60 @@ CLIENT_JS = r"""
     };
   }
 
-  function rankingSpec(entries, title, noun) {
+  function rankingSpec(entries, title, noun, colourByVendor, byCost) {
     var n = Math.min(entries.length, CFG.topN);
-    var slice = entries.slice(0, n);
+    // Sort on the effective metric. The caller resolves byCost so that a cost
+    // view with no recorded cost falls back to tokens rather than drawing a
+    // wall of empty bars under a "by tokens" title.
+    var sorted = entries.slice().sort(function (a, b) {
+      return (b[byCost ? "cost_usd" : "total_tokens"] -
+              a[byCost ? "cost_usd" : "total_tokens"]);
+    });
+    var slice = sorted.slice(0, n);
     if (!slice.length) { return null; }
-    var values = slice.map(function (e) { return e.total_tokens; });
+    var values = slice.map(function (e) {
+      return e[byCost ? "cost_usd" : "total_tokens"];
+    });
+    var colours = colourByVendor
+      ? slice.map(function (e) {
+          return CFG.vendorColors[CFG.modelVendor[e.key]] || CFG.aggregateColor;
+        })
+      : CFG.aggregateColor;
     return {
       traces: [{
         type: "bar", orientation: "h",
         x: values, y: slice.map(function (e) { return e.key; }),
-        text: values.map(function (v) { return fmtTokens(v); }),
+        text: values.map(function (v) {
+          return byCost ? fmtCostBar(v) : fmtTokens(v);
+        }),
         texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
         textfont: { color: "#374151", size: 11 },
-        marker: { color: CFG.aggregateColor },
-        hovertemplate: "%{y}<br>%{x:,} tokens<extra></extra>"
+        marker: { color: colours },
+        customdata: slice.map(function (e) {
+          return [CFG.modelVendor[e.key] || ""];
+        }),
+        hovertemplate: byCost
+          ? "%{y}<br>$%{x:,.4f}<extra></extra>"
+          : "%{y}<br>%{x:,} tokens<extra></extra>"
       }],
       layout: layout({
         title: { text: title },
-        xaxis: axis("xaxis", { title: { text: "Input + output tokens" },
-                                range: paddedRange(Math.max.apply(null, values)) }),
+        xaxis: axis("xaxis", {
+          title: { text: byCost ? "Estimated cost (USD)" : "Input + output tokens" },
+          range: paddedRange(Math.max.apply(null, values)) }),
         yaxis: axis("yaxis", { categoryorder: "total ascending",
                                title: { text: noun } })
       }, Math.max(260, 34 * n + 120))
     };
+  }
+
+  // A ranking by cost is meaningless while every row records zero, and a single
+  // priced model among many is a stray bar rather than a ranking - the same
+  // standard the cost section applies. Below that, fall back to tokens rather
+  // than drawing a wall of empty bars.
+  function hasMetricData(d) {
+    if (state.metric !== "cost") { return true; }
+    return d.costed.length >= CFG.minCostModels;
   }
 
   function providerSpec(d) {
@@ -1107,6 +1546,51 @@ CLIENT_JS = r"""
     };
   }
 
+  // Cache reuse: the share of a model's prompt tokens that were served from the
+  // provider's cache rather than resent. Computed against input + cache read,
+  // because those are the tokens that had to be present in the prompt; a model
+  // with no cache reads shows 0% and reads as "always resend".
+  function cacheReuseSpec(d) {
+    var rows = d.models.filter(function (m) {
+      return m.calls >= CFG.minCallsForCacheReuse &&
+             (m.input_tokens + m.cache_read_tokens) > 0;
+    }).map(function (m) {
+      return {
+        key: m.key,
+        share: m.cache_read_tokens / (m.input_tokens + m.cache_read_tokens),
+        cache: m.cache_read_tokens,
+        calls: m.calls
+      };
+    }).sort(function (a, b) { return b.share - a.share; });
+    if (!rows.length) { return null; }
+    var values = rows.map(function (r) { return r.share; });
+    return {
+      traces: [{
+        type: "bar", orientation: "h",
+        x: values, y: rows.map(function (r) { return r.key; }),
+        text: values.map(function (v) { return (v * 100).toFixed(0) + "%"; }),
+        texttemplate: "%{text}", textposition: "outside", cliponaxis: false,
+        textfont: { color: "#374151", size: 11 },
+        marker: { color: rows.map(function (r) {
+          return CFG.vendorColors[CFG.modelVendor[r.key]] || CFG.aggregateColor;
+        }) },
+        customdata: rows.map(function (r) { return [r.cache, r.calls]; }),
+        hovertemplate: "%{y}<br>%{x:.0%} from cache<br>" +
+          "%{customdata[0]:,} cache-read tokens over " +
+          "%{customdata[1]} calls<extra></extra>"
+      }],
+      layout: layout({
+        title: { text: "Cache reuse by model (" + CFG.minCallsForCacheReuse +
+                       "+ calls)" },
+        xaxis: axis("xaxis", {
+          title: { text: "Share of prompt tokens served from cache" },
+          tickformat: ".0%", range: paddedRange(Math.max.apply(null, values)) }),
+        yaxis: axis("yaxis", { categoryorder: "total ascending",
+                               title: { text: "" } })
+      }, Math.max(260, 34 * rows.length + 120))
+    };
+  }
+
   function effortSpec(d) {
     if (d.efforts.length < 2) { return null; }
     var withTokens = d.efforts.filter(function (e) { return e.total_tokens > 0; });
@@ -1180,6 +1664,22 @@ CLIENT_JS = r"""
       "appears once two or more effort levels are recorded.";
   }
 
+  function cacheReuseEmpty(d) {
+    var few = d.models.filter(function (m) {
+      return m.calls >= CFG.minCallsForCacheReuse;
+    }).length;
+    if (!few) {
+      return "<b>No model has enough calls to rank cache reuse.</b> A model " +
+        "seen on a couple of calls says nothing stable about its cache " +
+        "behaviour, so this chart appears once at least one model reaches " +
+        CFG.minCallsForCacheReuse + " calls.";
+    }
+    return "<b>No cache reuse recorded.</b> None of the models with " +
+      CFG.minCallsForCacheReuse + "+ calls reported any cache-read tokens, so " +
+      "every prompt was resent in full rather than served from the provider's " +
+      "cache.";
+  }
+
   function footerHtml(d) {
     var out = ["<p>Cache read is an independent counter reported separately from " +
                "input and output; it is not part of the input + output total " +
@@ -1196,6 +1696,231 @@ CLIENT_JS = r"""
     return out.join("");
   }
 
+  // ---- Rows table -------------------------------------------------------
+  // A filterable, sortable view over the embedded export rows. It reuses the
+  // page's existing filters (state.rows), so what it shows always agrees with
+  // the charts above; its own search and sort are local to the table.
+
+  var ROWS_PAGE_SIZE = 25;
+  var rowsState = { sortKey: "date", sortDir: "desc", search: "", page: 0 };
+
+  var ROW_COLUMNS = [
+    { key: "date", label: "Date", type: "text" },
+    { key: "project", label: "Project", type: "text" },
+    { key: "model", label: "Model", type: "text" },
+    { key: "provider", label: "Provider", type: "text" },
+    { key: "variant", label: "Effort", type: "text" },
+    { key: "calls", label: "Calls", type: "int" },
+    { key: "input_tokens", label: "Input", type: "tokens" },
+    { key: "output_tokens", label: "Output", type: "tokens" },
+    { key: "cache_read_tokens", label: "Cache read", type: "tokens" },
+    { key: "cache_write_tokens", label: "Cache write", type: "tokens" },
+    { key: "reasoning_tokens", label: "Reasoning", type: "tokens" },
+    { key: "total_tokens", label: "Total", type: "tokens" },
+    { key: "cost_usd", label: "Cost", type: "cost" },
+    { key: "session_id", label: "Session", type: "text" }
+  ];
+
+  function rowsCell(col, row) {
+    var value = row[col.key];
+    if (col.type === "tokens") { return fmtTokens(Number(value) || 0); }
+    if (col.type === "cost") { return fmtCost(Number(value) || 0); }
+    if (col.type === "int") { return group(Number(value) || 0); }
+    return value === undefined || value === null ? "" : String(value);
+  }
+
+  // Rows narrowed by the table's own search box, across every visible column.
+  // Both the raw value and the rendered one are matched: the numbers that reach
+  // the CSV download are the raw ones, so a figure copied from the CSV should
+  // find its row here, while a reader who types the grouped or abbreviated form
+  // they see on screen should find it too.
+  function searchedRows() {
+    var needle = rowsState.search;
+    if (!needle) { return state.rows; }
+    return state.rows.filter(function (row) {
+      for (var i = 0; i < ROW_COLUMNS.length; i++) {
+        var col = ROW_COLUMNS[i];
+        var shown = rowsCell(col, row);
+        if (shown.toLowerCase().indexOf(needle) !== -1) { return true; }
+        var raw = row[col.key];
+        if (raw === undefined || raw === null) { continue; }
+        if (String(raw).toLowerCase().indexOf(needle) !== -1) { return true; }
+      }
+      return false;
+    });
+  }
+
+  function sortedRows(rows) {
+    var key = rowsState.sortKey;
+    var col = ROW_COLUMNS.filter(function (c) { return c.key === key; })[0];
+    var dir = rowsState.sortDir === "asc" ? 1 : -1;
+    var numeric = col && (col.type === "int" || col.type === "tokens" ||
+                          col.type === "cost");
+    return rows.slice().sort(function (a, b) {
+      if (numeric) {
+        return ((Number(a[key]) || 0) - (Number(b[key]) || 0)) * dir;
+      }
+      var av = a[key] === undefined || a[key] === null ? "" : String(a[key]);
+      var bv = b[key] === undefined || b[key] === null ? "" : String(b[key]);
+      return av < bv ? -dir : (av > bv ? dir : 0);
+    });
+  }
+
+  function renderRows() {
+    var table = $("rows-table");
+    if (!table) { return; }
+    var all = sortedRows(searchedRows());
+    var pages = Math.max(1, Math.ceil(all.length / ROWS_PAGE_SIZE));
+    if (rowsState.page >= pages) { rowsState.page = pages - 1; }
+    if (rowsState.page < 0) { rowsState.page = 0; }
+    var start = rowsState.page * ROWS_PAGE_SIZE;
+    var slice = all.slice(start, start + ROWS_PAGE_SIZE);
+
+    var head = "<tr>" + ROW_COLUMNS.map(function (col) {
+      var active = rowsState.sortKey === col.key;
+      var arrow = active ? (rowsState.sortDir === "asc" ? " &#9650;" : " &#9660;") : "";
+      var numeric = col.type !== "text";
+      return '<th data-sort="' + esc(col.key) + '"' +
+        ' aria-sort="' + (active ? (rowsState.sortDir === "asc"
+          ? "ascending" : "descending") : "none") + '"' +
+        ' tabindex="0" class="' + (numeric ? "num" : "") + '">' +
+        esc(col.label) + arrow + "</th>";
+    }).join("") + "</tr>";
+    table.querySelector("thead").innerHTML = head;
+
+    var body;
+    if (!slice.length) {
+      body = '<tr><td class="rows-empty" colspan="' + ROW_COLUMNS.length +
+        '">' + (state.rows.length
+          ? "No rows match this search."
+          : "No rows match the current dashboard filters.") + "</td></tr>";
+    } else {
+      body = slice.map(function (row) {
+        return "<tr>" + ROW_COLUMNS.map(function (col) {
+          var numeric = col.type !== "text";
+          return '<td class="' + (numeric ? "num" : "") + '">' +
+            esc(rowsCell(col, row)) + "</td>";
+        }).join("") + "</tr>";
+      }).join("");
+    }
+    table.querySelector("tbody").innerHTML = body;
+
+    var meta = $("rows-meta");
+    if (meta) {
+      meta.textContent = all.length === state.rows.length
+        ? group(all.length) + " rows"
+        : group(all.length) + " of " + group(state.rows.length) + " rows";
+    }
+    var pageEl = $("rows-page");
+    if (pageEl) {
+      pageEl.textContent = all.length
+        ? "Page " + (rowsState.page + 1) + " of " + pages
+        : "No rows";
+    }
+    var prev = $("rows-prev"), next = $("rows-next");
+    if (prev) { prev.disabled = rowsState.page <= 0; }
+    if (next) { next.disabled = rowsState.page >= pages - 1; }
+  }
+
+  // Download exactly what the table is showing: current dashboard filters,
+  // this table's search, and its sort order, as a CSV.
+  function downloadRowsCsv() {
+    var all = sortedRows(searchedRows());
+    var lines = [ROW_COLUMNS.map(function (col) {
+      return col.key;
+    }).join(",")];
+    all.forEach(function (row) {
+      lines.push(ROW_COLUMNS.map(function (col) {
+        var raw = row[col.key];
+        if (raw === undefined || raw === null) { return ""; }
+        var text = String(raw);
+        // A leading =, +, - or @ makes a spreadsheet treat the cell as a
+        // formula, and quoting does not stop that - the sheet still evaluates
+        // it. Prefix those values with a single quote so the text survives a
+        // round trip through Excel or Sheets. None of our numeric columns can
+        // be negative (load_data rejects that), so a leading - here is always
+        // text that happens to start with a dash.
+        if (/^[=+\-@\t\r]/.test(text)) { text = "'" + text; }
+        return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+      }).join(","));
+    });
+    var blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = "opencode_usage_filtered.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function wireRows() {
+    var search = $("rows-search");
+    if (search) {
+      search.addEventListener("input", function () {
+        rowsState.search = search.value.trim().toLowerCase();
+        rowsState.page = 0;
+        renderRows();
+      });
+    }
+    var table = $("rows-table");
+    if (table) {
+      table.querySelector("thead").addEventListener("click", function (event) {
+        var th = event.target.closest("[data-sort]");
+        if (!th) { return; }
+        toggleRowSort(th.getAttribute("data-sort"));
+      });
+      table.querySelector("thead").addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") { return; }
+        var th = event.target.closest("[data-sort]");
+        if (!th) { return; }
+        event.preventDefault();
+        toggleRowSort(th.getAttribute("data-sort"));
+      });
+    }
+    var prev = $("rows-prev"), next = $("rows-next");
+    if (prev) {
+      prev.addEventListener("click", function () {
+        rowsState.page -= 1; renderRows();
+      });
+    }
+    if (next) {
+      next.addEventListener("click", function () {
+        rowsState.page += 1; renderRows();
+      });
+    }
+    var download = $("rows-download");
+    if (download) { download.addEventListener("click", downloadRowsCsv); }
+  }
+
+  function toggleRowSort(key) {
+    if (rowsState.sortKey === key) {
+      rowsState.sortDir = rowsState.sortDir === "asc" ? "desc" : "asc";
+    } else {
+      rowsState.sortKey = key;
+      rowsState.sortDir = key === "date" ? "desc" : "asc";
+    }
+    rowsState.page = 0;
+    renderRows();
+  }
+
+  // The Cost button can stay pressed while the paid-model gate suppresses the
+  // cost ranking (too few priced rows), so the button is not read as applied.
+  // The notice sits on the toolbar next to the button, not down in the charts.
+  function syncMetricNotice(d) {
+    var notice = $("metric-notice");
+    if (!notice) { return; }
+    if (state.metric === "cost" && !hasMetricData(d)) {
+      notice.textContent = "Not enough priced usage to rank by cost - " +
+        "showing tokens instead.";
+      notice.hidden = false;
+    } else {
+      notice.hidden = true;
+      notice.textContent = "";
+    }
+  }
+
   function render() {
     var d = aggregate(state.rows);
 
@@ -1203,6 +1928,10 @@ CLIENT_JS = r"""
     $("subtitle").innerHTML = subtitleHtml(d);
     $("insights").innerHTML = insightHtml(d);
     $("footer-notes").innerHTML = footerHtml(d);
+    syncMetricNotice(d);
+    // The rows table renders on every path, empty or not: it carries its own
+    // empty state rather than disappearing with the charts.
+    renderRows();
 
     var charts = document.getElementById("charts");
     if (!d.rows.length) {
@@ -1210,9 +1939,10 @@ CLIENT_JS = r"""
       present("projects", null); present("models", null);
       present("composition", null); present("providers", null);
       present("cost-by-model", null); present("efficiency", null);
-      present("effort", null);
+      present("effort", null); present("cache-reuse", null);
       presentNotice("cost-notice", false);
       presentNotice("effort-notice", false);
+      presentNotice("cache-reuse-notice", false);
       if (charts && !charts.querySelector(".no-rows")) {
         var note = document.createElement("p");
         note.className = "no-rows";
@@ -1230,12 +1960,23 @@ CLIENT_JS = r"""
 
     present("trend-tokens", trendSpec(d.daily, "total_tokens", "tokens"));
     present("trend-cost", trendSpec(d.daily, "cost_usd", "cost"));
+
+    var byCost = state.metric === "cost" && hasMetricData(d);
+    var unit = byCost ? "cost" : "tokens";
     present("projects", rankingSpec(d.projects,
-      "Top " + Math.min(d.projects.length, CFG.topN) + " projects by tokens", ""));
+      "Top " + Math.min(d.projects.length, CFG.topN) + " projects by " + unit,
+      "", false, byCost));
+    // Models are coloured by inferred vendor so a single gateway's slice still
+    // separates Google from Anthropic from OpenAI at a glance.
     present("models", rankingSpec(d.models,
-      "Top " + Math.min(d.models.length, CFG.topN) + " models by tokens", ""));
+      "Top " + Math.min(d.models.length, CFG.topN) + " models by " + unit,
+      "", true, byCost));
     present("composition", compositionSpec(d));
     present("providers", providerSpec(d));
+
+    var reuse = cacheReuseSpec(d);
+    present("cache-reuse", reuse);
+    presentNotice("cache-reuse-notice", !reuse, cacheReuseEmpty(d));
 
     var priced = enoughPricedModels(d);
     presentNotice("cost-notice", !priced, costEmpty(d));
@@ -1265,7 +2006,15 @@ CLIENT_JS = r"""
         ? stored.filter(function (name) { return name in groupTotals[g]; })
         : [];
     });
+    // Restore the date preset and ranking metric. A preset that is no longer
+    // offered (an older export's stored value) falls back to the default.
+    var validPreset = CFG.datePresets.some(function (p) {
+      return p.id === saved.datePreset;
+    });
+    setDatePreset(validPreset ? saved.datePreset : CFG.defaultDatePreset);
+    setMetric(saved.metric === "cost" ? "cost" : "tokens");
     wireFilters();
+    wireRows();
     refresh();
   }
 
@@ -1301,6 +2050,7 @@ def _client_rows(data: pd.DataFrame) -> list:
 
 def _client_config(data: pd.DataFrame, rows: list, generated_at: str) -> dict:
     """Everything the client needs that is not per-row data."""
+    model_to_vendor, vendor_palette = vendor_colors(data)
     return {
         "template": {"layout": pio.templates[TEMPLATE_NAME].layout.to_plotly_json()},
         "plotlyConfig": {"responsive": True, "displaylogo": False},
@@ -1315,6 +2065,11 @@ def _client_config(data: pd.DataFrame, rows: list, generated_at: str) -> dict:
         "labelHeadroom": LABEL_HEADROOM,
         "minCostModels": MIN_COST_MODELS,
         "minCallsForEfficiency": MIN_CALLS_FOR_EFFICIENCY,
+        "minCallsForCacheReuse": MIN_CALLS_FOR_CACHE_REUSE,
+        "datePresets": [{"id": p[0], "label": p[1]} for p in DATE_PRESETS],
+        "defaultDatePreset": DEFAULT_DATE_PRESET,
+        "modelVendor": model_to_vendor,
+        "vendorColors": vendor_palette,
         "filterPage": FILTER_PAGE,
         "userCount": int(data["user"].nunique()) if "user" in data.columns else 1,
         "generatedAt": generated_at,
@@ -1374,6 +2129,35 @@ def _sidebar_html() -> str:
     )
 
 
+def _toolbar_html() -> str:
+    """Date-range presets and the ranking metric toggle.
+
+    Both are segmented button groups. The pressed state is driven by the client
+    from stored preferences, so the markup here only defines the options.
+    """
+    date_buttons = "".join(
+        f'<button type="button" data-date-preset="{preset}"'
+        f' aria-pressed="{"true" if preset == DEFAULT_DATE_PRESET else "false"}"'
+        f">{html.escape(label)}</button>"
+        for preset, label in DATE_PRESETS
+    )
+    metric_buttons = "".join(
+        f'<button type="button" data-metric="{metric}"'
+        f' aria-pressed="{"true" if metric == "tokens" else "false"}"'
+        f">{label}</button>"
+        for metric, label in (("tokens", "Tokens"), ("cost", "Cost"))
+    )
+    return (
+        '<div class="toolbar">'
+        '<div class="seg"><span class="seg-label">Date range</span>'
+        f'<div class="seg-group" role="group" aria-label="Date range">{date_buttons}</div></div>'
+        '<div class="seg"><span class="seg-label">Rank by</span>'
+        f'<div class="seg-group" role="group" aria-label="Ranking metric">{metric_buttons}</div>'
+        '<span class="seg-note" id="metric-notice" hidden></span></div>'
+        "</div>"
+    )
+
+
 def _glossary_html() -> str:
     items = "".join(
         f'<dl class="glossary-item'
@@ -1390,8 +2174,44 @@ def _glossary_html() -> str:
     )
 
 
-def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
+def redact_data(
+    data: pd.DataFrame,
+    exclude_project: bool = False,
+    exclude_session_id: bool = False,
+) -> pd.DataFrame:
+    """Strip identifying free-text from a frame before it is embedded.
+
+    The generated HTML embeds its source rows, so a file meant for sharing can
+    otherwise carry local directory names and store identifiers. `user` and any
+    `session_title` column never reach the payload at all (see `_client_rows`),
+    so they need no flag here.
+
+    Excluded session IDs are relabelled to stable sequential tokens rather than
+    dropped, which keeps the Sessions KPI and the rows table honest without
+    exposing the original identifiers.
+    """
+    if not (exclude_project or exclude_session_id):
+        return data
+    data = data.copy()
+    if exclude_project:
+        data["project"] = "(excluded)"
+    if exclude_session_id:
+        labels = {
+            session: f"session-{index}"
+            for index, session in enumerate(sorted(data["session_id"].unique()))
+        }
+        data["session_id"] = data["session_id"].map(labels)
+    return data
+
+
+def build_dashboard(
+    data: pd.DataFrame,
+    out_path: Path,
+    exclude_project: bool = False,
+    exclude_session_id: bool = False,
+) -> None:
     plotly_template()
+    data = redact_data(data, exclude_project, exclude_session_id)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     rows = _client_rows(data)
     payload = _json_for_script({
@@ -1416,11 +2236,32 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
                 f'{_slot("cost-by-model", "full")}{_slot("efficiency")}'
                 "</div>"
             )
+        elif anchor == "sec-rows":
+            body = (
+                '<div class="rows-controls">'
+                '<input class="rows-search" type="search" id="rows-search"'
+                ' placeholder="Search all columns..."'
+                ' autocomplete="off" aria-label="Search rows">'
+                '<span class="rows-meta" id="rows-meta"></span>'
+                '<button type="button" class="rows-download" id="rows-download">'
+                "Download CSV</button>"
+                "</div>"
+                '<div class="rows-scroll">'
+                '<table class="rows-table" id="rows-table">'
+                "<thead></thead><tbody></tbody></table></div>"
+                '<div class="rows-pager">'
+                '<button type="button" id="rows-prev">Previous</button>'
+                '<span class="rows-meta" id="rows-page"></span>'
+                '<button type="button" id="rows-next">Next</button>'
+                "</div>"
+            )
         else:
             body = (
                 '<div class="grid">'
                 f'{_slot("composition")}{_slot("providers")}'
                 "</div>"
+                + _slot("cache-reuse-notice", "full")
+                + _slot("cache-reuse", "full")
                 + _slot("effort-notice")
                 + _slot("effort")
                 + f'<div class="grid full">{_glossary_html()}</div>'
@@ -1447,6 +2288,7 @@ def build_dashboard(data: pd.DataFrame, out_path: Path) -> None:
 <nav class="nav-pills">{nav_html}</nav>
 </div>
 <div class="page">
+{_toolbar_html()}
 <div class="filter-actions top">
 <button type="button" id="reset-filters">Reset filters</button>
 </div>
@@ -1474,10 +2316,27 @@ def main(argv=None) -> int:
                         help="Input CSV path or glob pattern")
     parser.add_argument("--out", type=Path, default=Path("usage_dashboard.html"),
                         help="HTML output path")
+    parser.add_argument("--exclude-project", action="store_true",
+                        help="Replace project names with '(excluded)' before embedding rows")
+    parser.add_argument("--exclude-session-id", action="store_true",
+                        help="Replace session IDs with sequential tokens before embedding rows")
     args = parser.parse_args(argv)
     data = load_data(args.input_pattern)
-    build_dashboard(data, args.out)
-    print(f"Wrote dashboard to {args.out}")
+    build_dashboard(
+        data, args.out,
+        exclude_project=args.exclude_project,
+        exclude_session_id=args.exclude_session_id,
+    )
+    note = ""
+    if args.exclude_project or args.exclude_session_id:
+        redacted = [
+            label for label, on in (
+                ("projects", args.exclude_project),
+                ("session IDs", args.exclude_session_id),
+            ) if on
+        ]
+        note = " (redacted: " + ", ".join(redacted) + ")"
+    print(f"Wrote dashboard to {args.out}{note}")
     return 0
 
 

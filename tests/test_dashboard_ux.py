@@ -15,6 +15,7 @@ browser, is unavailable, so the suite still runs in a bare environment:
 import importlib.util
 import sys
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -247,7 +248,7 @@ def test_page_loads_without_external_requests(browser, sample_html):
     """
     context = browser.new_context(viewport={"width": 1280, "height": 900})
     handle = context.new_page()
-    external: list[str] = []
+    external: List[str] = []
     handle.on(
         "request",
         lambda request: external.append(request.url)
@@ -408,3 +409,86 @@ def test_sidebar_collapse_is_remembered(browser, sample_html):
         ".plot-slot:not([hidden]) .main-svg", "els => els.length"
     ) > 0
     context.close()
+
+
+def _load_make_sample_data() -> object:
+    """Load tools/make_sample_data.py like the fixtures do, not as a package."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "make_sample_data",
+        Path(__file__).resolve().parent.parent / "tools" / "make_sample_data.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="session")
+def short_window_html(tmp_path_factory) -> Path:
+    """A dashboard whose export spans 9 days.
+
+    The "7" preset's previous window reaches past the earliest day, which the old
+    code clamped to and then compared against a shorter period - inflating the
+    percentage. That path must stay suppressed.
+    """
+    module = _load_make_sample_data()
+    rows = module.build_rows(days=9, seed=2026)
+    csv_path = tmp_path_factory.mktemp("wm") / "short.csv"
+    import csv
+
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=module.FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    html_path = tmp_path_factory.mktemp("wm") / "short.html"
+    build_dashboard(load_data(str(csv_path)), html_path)
+    return html_path
+
+
+@pytest.fixture(scope="session")
+def long_window_html(tmp_path_factory) -> Path:
+    """A dashboard whose export spans 60 days - the previous "7"-day window stays in."""
+    module = _load_make_sample_data()
+    rows = module.build_rows(days=60, seed=3001)
+    csv_path = tmp_path_factory.mktemp("wm") / "long.csv"
+    import csv
+
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=module.FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    html_path = tmp_path_factory.mktemp("wm") / "long.html"
+    build_dashboard(load_data(str(csv_path)), html_path)
+    return html_path
+
+
+def test_prev_window_is_suppressed_when_truncated(browser, short_window_html):
+    """A preset wider than the data must not show an inflated delta."""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(short_window_html.resolve().as_uri())
+    page.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
+    page.click('[data-date-preset="7"]')
+    deltas = page.locator("#kpis .delta").count()
+    assert deltas == 0
+    page.close()
+
+
+def test_kpi_delays_appear_when_previous_window_is_complete(browser, long_window_html):
+    """A current window whose previous window stays in the data shows deltas."""
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(long_window_html.resolve().as_uri())
+    page.wait_for_selector(".plot-slot .main-svg", timeout=30_000)
+    page.click('[data-date-preset="7"]')
+    deltas = page.locator("#kpis .delta").count()
+    assert deltas > 0
+    page.close()
+
+
+def test_cost_metric_notice_shows_when_gate_suppresses(sparse_page):
+    """Pressing Cost with fewer than two paid models shows the fallback notice."""
+    page = sparse_page
+    page.click('[data-metric="cost"]')
+    assert page.is_visible('#metric-notice')
+    body = page.inner_text("body")
+    assert "showing tokens instead" in body
