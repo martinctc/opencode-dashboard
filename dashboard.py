@@ -101,6 +101,10 @@ CATEGORY_EXPLAINERS = {
     "Reasoning": "Tokens a reasoning model spent thinking before answering. "
                  "Counted separately from output, so reasoning-heavy models "
                  "look cheaper than they are.",
+    "Cache reuse": "Share of prompt tokens served from cache instead of being "
+                   "resent. Calculated as cache read ÷ (input + cache read). "
+                   "A higher percentage means more context was reused across "
+                   "turns. Models need enough calls to show stable reuse rates.",
 }
 
 # Okabe-Ito, a colour-blind-safe categorical palette. Colour is chosen by what a
@@ -2161,7 +2165,7 @@ def _toolbar_html() -> str:
 def _glossary_html() -> str:
     items = "".join(
         f'<dl class="glossary-item'
-        f'{" highlight" if name == "Cache read" else ""}">'
+        f'{" highlight" if name in ("Cache read", "Cache reuse") else ""}">'
         f"<dt>{html.escape(name)}</dt><dd>{html.escape(body)}</dd></dl>"
         for name, body in CATEGORY_EXPLAINERS.items()
     )
@@ -2170,7 +2174,7 @@ def _glossary_html() -> str:
         f'categories mean?</summary><div class="glossary-grid">{items}</div>'
         '<p class="explain-note">Cache read and reasoning are tracked as '
         "independent counters, so they are not part of the input + output "
-        "headline.</p></details>"
+        "headline. Cache reuse measures how much of the prompt was served from cache.</p></details>"
     )
 
 

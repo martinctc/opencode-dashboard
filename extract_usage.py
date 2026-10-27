@@ -134,14 +134,99 @@ def _project_name(directory: str, name: str) -> str:
 
 
 def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool):
-    query = """
+    # Newer OpenCode versions store sessions in session_v2; fall back to session
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    session_table = "session_v2" if "session_v2" in tables else "session"
+    grouped = {}
+    
+    # Try new schema first (session_message)
+    if "session_message" in tables:
+        query = f"""
+            SELECT sm.id, sm.session_id, sm.data, s.directory, s.title, p.name
+            FROM session_message AS sm
+            JOIN {session_table} AS s ON s.id = sm.session_id
+            LEFT JOIN project AS p ON p.id = s.project_id
+            WHERE sm.type = 'assistant'
+            ORDER BY sm.id
+        """
+        for row in conn.execute(query):
+            message_id, session_id, raw_data, directory, title, project = row
+            try:
+                message = json.loads(raw_data)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Invalid JSON for OpenCode message {message_id}") from exc
+            if not isinstance(message, dict):
+                raise ValueError(f"Invalid OpenCode message data for {message_id}")
+            tokens = message.get("tokens")
+            if not isinstance(tokens, dict):
+                continue  # Skip messages without token data
+            cache = tokens.get("cache") or {}
+            model_info = message.get("model") or {}
+            provider = model_info.get("providerID") or message.get("providerID")
+            model_id = model_info.get("id") or message.get("modelID")
+            if not provider or not model_id:
+                continue
+            variant = model_info.get("variant") or message.get("variant") or "n/a"
+            timestamp = (message.get("time") or {}).get("created") or message.get("time_created")
+            if timestamp is None:
+                continue
+            timestamp = _nonnegative_number(timestamp, f"timestamp for message {message_id}")
+            day = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).date().isoformat()
+            identity = (session_id, day, provider, model_id, variant)
+            if identity not in grouped:
+                record = {
+                    "source": "OpenCode",
+                    "user": user_label,
+                    "date": day,
+                    "project": _project_name(directory or "", project or ""),
+                    "provider": provider,
+                    "model": f"{provider}/{model_id}",
+                    "variant": variant,
+                    "calls": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 0,
+                    "cost_usd": 0.0,
+                    "session_id": session_id,
+                    "export_format_version": EXPORT_FORMAT_VERSION,
+                }
+                if include_title:
+                    record["session_title"] = title or ""
+                grouped[identity] = record
+            record = grouped[identity]
+            input_tokens = _nonnegative_number(tokens.get("input") or 0, "input tokens")
+            output_tokens = _nonnegative_number(tokens.get("output") or 0, "output tokens")
+            record["calls"] += 1
+            record["input_tokens"] += input_tokens
+            record["output_tokens"] += output_tokens
+            record["cache_read_tokens"] += _nonnegative_number(
+                cache.get("read") or 0, "cache read tokens"
+            )
+            record["cache_write_tokens"] += _nonnegative_number(
+                cache.get("write") or 0, "cache write tokens"
+            )
+            record["reasoning_tokens"] += _nonnegative_number(
+                tokens.get("reasoning") or 0, "reasoning tokens"
+            )
+            record["total_tokens"] += input_tokens + output_tokens
+            record["cost_usd"] += _nonnegative_number(message.get("cost") or 0, "cost")
+        return list(grouped.values())
+    
+    # Old schema
+    query = f"""
         SELECT m.id, m.session_id, m.data, s.directory, s.title, p.name
         FROM message AS m
-        JOIN session AS s ON s.id = m.session_id
+        JOIN {session_table} AS s ON s.id = m.session_id
         LEFT JOIN project AS p ON p.id = s.project_id
         ORDER BY m.id
     """
-    grouped = {}
     for row in conn.execute(query):
         message_id, session_id, raw_data, directory, title, project = row
         try:
