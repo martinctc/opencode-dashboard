@@ -46,7 +46,9 @@ worth porting unless OpenCode exposes the same thing.
 | Build-time redaction (`--exclude-project`, `--exclude-session-id`) | yes |
 | Export format versioning, legacy loads tolerated | yes, version 1, warns above and on uncertain ordering |
 | Continuous integration on push | yes, unit + browser jobs |
-| GitHub Pages documentation site | yes, docs only, never a generated dashboard |
+| GitHub Pages documentation site | yes, docs plus a synthetic sample dashboard |
+| Community health files (CONTRIBUTING, SECURITY, SUPPORT, CODE_OF_CONDUCT) | yes |
+| Issue templates, Discussions, repository topics | yes |
 
 ## Not yet done
 
@@ -71,8 +73,9 @@ Ordered roughly by how much it would matter for this data.
 
 ### Repository
 
-- **`CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`** are
-  absent; upstream has all four.
+- Nothing outstanding. `CONTRIBUTING.md`, `SECURITY.md`, `SUPPORT.md` and
+  `CODE_OF_CONDUCT.md` are present, along with issue templates, Discussions, and
+  repository topics.
 
 ### Data this project does not collect
 
