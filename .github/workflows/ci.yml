@@ -20,7 +20,10 @@ concurrency:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04 because ubuntu-latest is now 26.04, which no longer
+    # provides a Python 3.9 build, and the matrix below tests the 3.9 floor the
+    # README promises. Revisit when 3.9 is dropped or a 26.04 build appears.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
