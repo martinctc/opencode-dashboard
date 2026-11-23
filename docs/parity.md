@@ -46,6 +46,7 @@ worth porting unless OpenCode exposes the same thing.
 | Sortable, searchable rows table with CSV download | yes, paginated |
 | Build-time redaction (`--exclude-project`, `--exclude-session-id`) | yes |
 | Export format versioning, legacy loads tolerated | yes, version 1, warns above and on uncertain ordering |
+| Schema diagnostics (`--schema-report`, export column diff) | yes, known good OpenCode 2.1.4 |
 | Continuous integration on push | yes, unit + browser jobs |
 | GitHub Pages documentation site | yes, docs plus a synthetic sample dashboard |
 | Community health files (CONTRIBUTING, SECURITY, SUPPORT, CODE_OF_CONDUCT) | yes |

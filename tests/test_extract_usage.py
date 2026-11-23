@@ -95,3 +95,33 @@ def test_cli_exports_from_read_only_snapshot(usage_db, tmp_path):
     assert len(rows) == 1
     assert rows[0]["total_tokens"] == "280"
     assert rows[0]["cost_usd"] == "0.5"
+
+
+def test_schema_report_lists_tables_and_columns(usage_db, tmp_path, capsys):
+    db_path = tmp_path / "opencode.db"
+
+    assert main(["--db", str(db_path), "--schema-report"]) == 0
+
+    out = capsys.readouterr().out
+    assert "Detected tables:" in out
+    assert "message:" in out
+    assert "session:" in out
+    assert "project:" in out
+    assert "Required schema:" in out
+    assert "session: OK" in out
+    assert "message: OK" in out
+    assert "project: OK" in out
+
+
+def test_schema_report_reports_missing_columns(tmp_path, capsys):
+    db_path = tmp_path / "partial.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE message (id TEXT)")
+    conn.commit()
+    conn.close()
+
+    assert main(["--db", str(db_path), "--schema-report"]) == 0
+
+    out = capsys.readouterr().out
+    assert "missing table" in out
+    assert "message: missing column(s):" in out
