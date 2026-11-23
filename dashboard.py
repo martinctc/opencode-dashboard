@@ -78,6 +78,17 @@ DATE_PRESETS = [
 ]
 DEFAULT_DATE_PRESET = "all"
 
+# A dashboard whose newest data is older than this many days shows a banner
+# prompting a re-export. The age is measured against the viewer's clock, so a
+# stale CSV reads as stale whenever it is opened.
+DEFAULT_STALE_AFTER_DAYS = 14
+
+# Embedded row counts at which the page warns that the payload is getting
+# heavy: the client re-slices every row on each filter change, so past these
+# sizes the page is slow to load and filters feel sluggish.
+ROW_WARN_ROWS = 10_000
+ROW_WARN_ROWS_HIGH = 50_000
+
 # Viridis samples for ordered levels: reasoning effort runs purple (low) to
 # yellow (high). Unrecorded effort is grey so it reads as a catch-all.
 EFFORT_COLORS = {
@@ -489,6 +500,24 @@ button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visibl
 .insight.warn { background: #fff8e6; border-left-color: var(--warn); color: #6b4d00; }
 .insight.good { background: #edf9f0; border-left-color: var(--good); color: #14532d; }
 .insight b { font-weight: 700; }
+/* Data-freshness and payload-size signals, shown above the toolbar. */
+.data-signals { display: flex; flex-direction: column; gap: 8px; margin: 0 0 14px; }
+.data-signals:empty { display: none; }
+.signal {
+  display: flex; gap: 10px; align-items: flex-start; font-size: 13px;
+  background: #fff8e6; border-left: 3px solid var(--warn); border-radius: 6px;
+  padding: 9px 12px; color: #6b4d00;
+}
+.signal span { min-width: 0; overflow-wrap: anywhere; }
+.signal code {
+  background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 1px 5px;
+  font-size: 12px;
+}
+.signal .signal-dismiss {
+  margin-left: auto; border: 0; background: transparent; cursor: pointer;
+  font: inherit; line-height: 1; color: inherit; opacity: 0.65; padding: 0 2px;
+}
+.signal .signal-dismiss:hover { opacity: 1; }
 .empty-state {
   font-size: 13px; color: var(--muted); background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
@@ -951,6 +980,101 @@ CLIENT_JS = r"""
     return best;
   }
 
+  // ---- Data-freshness and payload-size signals -------------------------
+  var SIGNALS_KEY = "opencode-dashboard-signals";
+
+  function signalsLoad() {
+    try {
+      return JSON.parse(window.localStorage.getItem(SIGNALS_KEY) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function signalsSave(value) {
+    try {
+      window.localStorage.setItem(SIGNALS_KEY, JSON.stringify(value));
+    } catch (e) { /* private mode or file:// restrictions */ }
+  }
+
+  // Whole days between a "YYYY-MM-DD" string and now, or null when absent.
+  function daysSince(dateString) {
+    if (!dateString) { return null; }
+    var then = Date.parse(dateString + "T00:00:00Z");
+    if (isNaN(then)) { return null; }
+    return Math.floor((Date.now() - then) / 86400000);
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes < 0) { return "0 KB"; }
+    if (bytes < 1024) { return bytes + " B"; }
+    if (bytes < 1048576) { return (bytes / 1024).toFixed(1) + " KB"; }
+    return (bytes / 1048576).toFixed(2) + " MB";
+  }
+
+  function rowCountLabel(d) {
+    if (d.rows.length === CFG.rowCount) {
+      return group(CFG.rowCount) + " rows";
+    }
+    return group(d.rows.length) + " of " + group(CFG.rowCount) + " rows";
+  }
+
+  function signalHtml(id, text) {
+    return '<div class="signal" data-signal="' + id + '"><span>' + text +
+      "</span>" +
+      '<button type="button" class="signal-dismiss" data-dismiss-signal="' +
+      id + '" aria-label="Dismiss this notice">&times;</button></div>';
+  }
+
+  function renderDataSignals() {
+    var host = $("data-signals");
+    if (!host) { return; }
+    var saved = signalsLoad();
+    var out = [];
+
+    // Stale export: compare the latest date in the data with the viewer's clock.
+    var through = latestDate();
+    var age = daysSince(through);
+    if (age !== null && CFG.staleAfterDays > 0 && age > CFG.staleAfterDays &&
+        saved.staleThrough !== through) {
+      out.push(signalHtml("stale",
+        "This export is <b>" + age + " day" + (age === 1 ? "" : "s") +
+        "</b> old (data through " + esc(through) + "). Re-run " +
+        "<code>python extract_usage.py</code> to refresh it."));
+    }
+
+    // Large payload: the client re-slices every row on each filter change, so
+    // the cost shows up as slow loads and sluggish filters.
+    if (CFG.rowCount >= CFG.rowWarnRows && saved.scaleRows !== CFG.rowCount) {
+      var heavy = CFG.rowCount >= CFG.rowWarnRowsHigh;
+      out.push(signalHtml("scale",
+        "<b>" + (heavy ? "Very large export" : "Large export") + ":</b> " +
+        group(CFG.rowCount) + " rows (" + formatBytes(CFG.payloadBytes) +
+        " embedded). " +
+        (heavy
+          ? "Expect slow loads and sluggish filters. "
+          : "The page can get slow to load and filters sluggish. ") +
+        "Export a shorter date range, or trim unused columns from the payload."));
+    }
+
+    host.innerHTML = out.join("");
+  }
+
+  function wireSignals() {
+    var host = $("data-signals");
+    if (!host) { return; }
+    host.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-dismiss-signal]");
+      if (!button) { return; }
+      var key = button.getAttribute("data-dismiss-signal");
+      var saved = signalsLoad();
+      if (key === "stale") { saved.staleThrough = latestDate(); }
+      if (key === "scale") { saved.scaleRows = CFG.rowCount; }
+      signalsSave(saved);
+      renderDataSignals();
+    });
+  }
+
   function setExcluded(group, names) {
     state.excluded[group] = names;
   }
@@ -1198,7 +1322,8 @@ CLIENT_JS = r"""
     var through = d.daily.length
       ? d.daily[d.daily.length - 1].key : "no dated usage";
     return "Data through " + through + " &middot; generated " +
-      CFG.generatedAt + " &middot; local session-store exports";
+      CFG.generatedAt + " &middot; " + rowCountLabel(d) + " &middot; " +
+      formatBytes(CFG.payloadBytes) + " embedded &middot; local session-store exports";
   }
 
   function aggregate(rows) {
@@ -1956,6 +2081,7 @@ CLIENT_JS = r"""
 
     $("kpis").innerHTML = kpiHtml(d);
     $("subtitle").innerHTML = subtitleHtml(d);
+    renderDataSignals();
     $("insights").innerHTML = insightHtml(d);
     $("footer-notes").innerHTML = footerHtml(d);
     syncMetricNotice(d);
@@ -2045,6 +2171,7 @@ CLIENT_JS = r"""
     setMetric(saved.metric === "cost" ? "cost" : "tokens");
     wireFilters();
     wireRows();
+    wireSignals();
     refresh();
   }
 
@@ -2078,7 +2205,8 @@ def _client_rows(data: pd.DataFrame) -> list:
     return rows
 
 
-def _client_config(data: pd.DataFrame, rows: list, generated_at: str) -> dict:
+def _client_config(data: pd.DataFrame, rows: list, generated_at: str,
+                   stale_after_days: int = DEFAULT_STALE_AFTER_DAYS) -> dict:
     """Everything the client needs that is not per-row data."""
     model_to_vendor, vendor_palette = vendor_colors(data)
     return {
@@ -2103,6 +2231,10 @@ def _client_config(data: pd.DataFrame, rows: list, generated_at: str) -> dict:
         "filterPage": FILTER_PAGE,
         "userCount": int(data["user"].nunique()) if "user" in data.columns else 1,
         "generatedAt": generated_at,
+        "rowCount": len(rows),
+        "staleAfterDays": stale_after_days,
+        "rowWarnRows": ROW_WARN_ROWS,
+        "rowWarnRowsHigh": ROW_WARN_ROWS_HIGH,
     }
 
 
@@ -2239,15 +2371,20 @@ def build_dashboard(
     out_path: Path,
     exclude_project: bool = False,
     exclude_session_id: bool = False,
+    stale_after_days: int = DEFAULT_STALE_AFTER_DAYS,
 ) -> None:
     plotly_template()
     data = redact_data(data, exclude_project, exclude_session_id)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     rows = _client_rows(data)
-    payload = _json_for_script({
-        "rows": rows,
-        "config": _client_config(data, rows, generated_at),
-    })
+    config = _client_config(data, rows, generated_at, stale_after_days)
+    # Two passes so the reported size includes the size field itself. The
+    # difference is a few bytes, and the figure is a guide rather than a
+    # measurement of the final HTML.
+    config["payloadBytes"] = 0
+    payload = _json_for_script({"rows": rows, "config": config})
+    config["payloadBytes"] = len(payload.encode("utf-8"))
+    payload = _json_for_script({"rows": rows, "config": config})
 
     sections_html = []
     for anchor, name, desc in SECTIONS:
@@ -2319,6 +2456,7 @@ def build_dashboard(
 </div>
 <div class="page">
 {_toolbar_html()}
+<div class="data-signals" id="data-signals"></div>
 <div class="filter-actions top">
 <button type="button" id="reset-filters">Reset filters</button>
 </div>
@@ -2350,12 +2488,16 @@ def main(argv=None) -> int:
                         help="Replace project names with '(excluded)' before embedding rows")
     parser.add_argument("--exclude-session-id", action="store_true",
                         help="Replace session IDs with sequential tokens before embedding rows")
+    parser.add_argument("--stale-after-days", type=int, default=DEFAULT_STALE_AFTER_DAYS,
+                        help="Show a stale-export banner when the newest data is older than this "
+                             "many days (default: %(default)s; 0 disables)")
     args = parser.parse_args(argv)
     data = load_data(args.input_pattern)
     build_dashboard(
         data, args.out,
         exclude_project=args.exclude_project,
         exclude_session_id=args.exclude_session_id,
+        stale_after_days=args.stale_after_days,
     )
     note = ""
     if args.exclude_project or args.exclude_session_id:
@@ -2366,7 +2508,7 @@ def main(argv=None) -> int:
             ) if on
         ]
         note = " (redacted: " + ", ".join(redacted) + ")"
-    print(f"Wrote dashboard to {args.out}{note}")
+    print(f"Wrote dashboard to {args.out}{note} ({len(data):,} rows)")
     return 0
 
 

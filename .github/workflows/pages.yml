@@ -62,7 +62,9 @@ jobs:
           mkdir -p site
           cp -R _site/. site/
           python tools/make_sample_data.py --out "$RUNNER_TEMP/sample_usage.csv"
-          python dashboard.py --in "$RUNNER_TEMP/sample_usage.csv" --out site/sample_dashboard.html
+          # The sample is a layout showcase, not a real export, so suppress the
+          # stale-data banner that would otherwise fire on its fixed dates.
+          python dashboard.py --in "$RUNNER_TEMP/sample_usage.csv" --out site/sample_dashboard.html --stale-after-days 0
 
       - uses: actions/upload-pages-artifact@v3
         with:

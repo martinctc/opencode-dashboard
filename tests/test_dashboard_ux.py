@@ -492,3 +492,65 @@ def test_cost_metric_notice_shows_when_gate_suppresses(sparse_page):
     assert page.is_visible('#metric-notice')
     body = page.inner_text("body")
     assert "showing tokens instead" in body
+
+
+@pytest.fixture(scope="session")
+def stale_html(tmp_path_factory) -> Path:
+    """A dashboard whose newest row is years old, so the staleness banner fires."""
+    rows = [{
+        "source": "OpenCode", "user": "u", "date": "2020-01-01",
+        "project": "old-project", "provider": "openai",
+        "model": "openai/gpt-test", "variant": "n/a", "calls": 1,
+        "input_tokens": 100, "output_tokens": 40, "cache_read_tokens": 0,
+        "cache_write_tokens": 0, "reasoning_tokens": 0, "total_tokens": 140,
+        "cost_usd": 0.25, "session_id": "s-old",
+        "export_format_version": "1", "exported_at": "2020-01-01T10:00:00+00:00",
+    }]
+    csv_path = tmp_path_factory.mktemp("stale") / "stale.csv"
+    html_path = tmp_path_factory.mktemp("stale") / "stale.html"
+    _write_csv(csv_path, rows, list(rows[0]))
+    build_dashboard(load_data(str(csv_path)), html_path)
+    return html_path
+
+
+@pytest.fixture(scope="session")
+def large_html(tmp_path_factory) -> Path:
+    """A dashboard with more than 10k embedded rows, to exercise the scale warning."""
+    module = _load_make_sample_data()
+    rows = module.build_rows(days=240, seed=2027)
+    csv_path = tmp_path_factory.mktemp("large") / "large.csv"
+    html_path = tmp_path_factory.mktemp("large") / "large.html"
+    _write_csv(csv_path, rows, module.FIELDS)
+    build_dashboard(load_data(str(csv_path)), html_path)
+    return html_path
+
+
+def test_stale_signal_shows_for_old_data(browser, stale_html):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(stale_html.resolve().as_uri())
+    page.wait_for_selector('[data-signal="stale"]', timeout=30_000)
+
+    text = page.inner_text('[data-signal="stale"]')
+    assert "old" in text
+    assert "python extract_usage.py" in text
+
+    page.click('[data-dismiss-signal="stale"]')
+    assert not page.is_visible('[data-signal="stale"]')
+    page.close()
+
+
+def test_large_export_signal_shows_scale_warning(browser, large_html):
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    page.goto(large_html.resolve().as_uri())
+    page.wait_for_selector('[data-signal="scale"]', timeout=30_000)
+
+    text = page.inner_text('[data-signal="scale"]')
+    assert "rows" in text
+    assert "embedded" in text
+    page.close()
+
+
+def test_subtitle_reports_row_count_and_payload_size(page):
+    subtitle = page.inner_text("#subtitle")
+    assert "rows" in subtitle
+    assert "embedded" in subtitle
