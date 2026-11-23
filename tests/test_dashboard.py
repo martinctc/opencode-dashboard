@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from dashboard import build_dashboard, load_data, main, redact_data
+from _version import __version__
 
 
 def sample_data():
@@ -247,3 +248,11 @@ def test_cli_accepts_stale_after_days(tmp_path):
 
     assert result == 0
     assert '"staleAfterDays":5' in output.read_text(encoding="utf-8")
+
+
+def test_cli_reports_version(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+
+    assert excinfo.value.code == 0
+    assert __version__ in capsys.readouterr().out

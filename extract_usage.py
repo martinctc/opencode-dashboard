@@ -19,6 +19,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from _version import __version__
+
 
 EXPORT_FORMAT_VERSION = "1"
 REQUIRED_SCHEMA = {
@@ -298,6 +300,7 @@ def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--db", type=Path, default=default_db_path(),
                         help="OpenCode database path (default: detected user data directory)")
     parser.add_argument("--out", type=Path, default=None,

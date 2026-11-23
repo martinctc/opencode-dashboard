@@ -50,6 +50,7 @@ worth porting unless OpenCode exposes the same thing.
 | GitHub Pages documentation site | yes, docs plus a synthetic sample dashboard |
 | Community health files (CONTRIBUTING, SECURITY, SUPPORT, CODE_OF_CONDUCT) | yes |
 | Issue templates, Discussions, repository topics | yes |
+| Release versioning and CHANGELOG | yes, 0.1.0 |
 
 ## Not yet done
 

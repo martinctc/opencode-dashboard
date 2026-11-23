@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from extract_usage import main, read_usage, validate_schema
+from _version import __version__
 
 
 @pytest.fixture
@@ -95,3 +96,11 @@ def test_cli_exports_from_read_only_snapshot(usage_db, tmp_path):
     assert len(rows) == 1
     assert rows[0]["total_tokens"] == "280"
     assert rows[0]["cost_usd"] == "0.5"
+
+
+def test_cli_reports_version(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+
+    assert excinfo.value.code == 0
+    assert __version__ in capsys.readouterr().out
