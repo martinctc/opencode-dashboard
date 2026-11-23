@@ -209,3 +209,41 @@ def test_build_dashboard_redaction_leaves_no_original_identifiers(tmp_path):
     # the relabelled ids are present and stable across the payload
     assert '"session-0"' in content
     assert '"session-1"' in content
+
+
+def test_build_dashboard_embeds_freshness_and_scale_config(tmp_path):
+    output = tmp_path / "dashboard.html"
+
+    build_dashboard(sample_data(), output)
+    html = output.read_text(encoding="utf-8")
+
+    # The page carries a container for the banners, and the client config
+    # includes the row count, the staleness threshold and the row thresholds.
+    assert 'id="data-signals"' in html
+    assert '"rowCount":1' in html
+    assert '"staleAfterDays":14' in html
+    assert '"rowWarnRows":10000' in html
+    assert '"rowWarnRowsHigh":50000' in html
+    assert '"payloadBytes":' in html
+
+
+def test_build_dashboard_accepts_custom_stale_threshold(tmp_path):
+    output = tmp_path / "dashboard.html"
+
+    build_dashboard(sample_data(), output, stale_after_days=3)
+
+    assert '"staleAfterDays":3' in output.read_text(encoding="utf-8")
+
+
+def test_cli_accepts_stale_after_days(tmp_path):
+    source = sample_data()
+    source["variant"] = "n/a"
+    source["exported_at"] = "2026-10-06T10:00:00+00:00"
+    csv_path = tmp_path / "usage.csv"
+    source.to_csv(csv_path, index=False)
+    output = tmp_path / "out.html"
+
+    result = main(["--in", str(csv_path), "--out", str(output), "--stale-after-days", "5"])
+
+    assert result == 0
+    assert '"staleAfterDays":5' in output.read_text(encoding="utf-8")

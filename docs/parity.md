@@ -38,6 +38,7 @@ worth porting unless OpenCode exposes the same thing.
 | Sidebar collapse persisted to localStorage | yes |
 | Synthetic sample data, screenshot tooling, browser tests | yes |
 | Date range presets (7 / 14 / 30 / 90 / All) | yes, anchored to latest export date |
+| Data-freshness and scale signals (stale banner, row-count warning) | yes, 14-day default, `--stale-after-days` |
 | Chart metric toggle for model ranking (tokens / cost) | yes, gated behind MIN_COST_MODELS so free exports show insufficient data |
 | Vendor-level model colouring inferred from the model path | yes, ranking and cache-reuse charts |
 | Cache reuse by model, shown where the data supports a rate | yes, 5-call minimum |
@@ -100,8 +101,11 @@ what future work can do.
   finer rows. That multiplies row count, which interacts with the next point.
 - **Page size grows with rows.** The embedded payload was 1.26MB for 3,811
   rows, about 21% of a 5.89MB file, on top of a ~4.85MB bundled Plotly. A long
-  export history will push on this; a row cap with a warning, or dropping the
-  columns filters do not need, is the obvious lever.
+  export history will push on this; the dashboard now warns at 10,000 and
+  50,000 embedded rows, but a hard row cap or dropping the columns filters do
+  not need remains the lever if the warning is not enough.
 - **Unexported usage.** The dashboard shows whatever the CSVs contain. The
   extractor runs against a point-in-time snapshot, so a stale CSV renders stale
-  data with a data-through date and nothing else to signal it.
+  data; the dashboard shows a data-through date and, when the newest data is
+  older than the staleness threshold (14 days by default, `--stale-after-days`),
+  a banner prompting a re-export.

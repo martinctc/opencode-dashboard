@@ -114,6 +114,10 @@ before sharing them. Generated data files are excluded by `.gitignore`.
   gateway or service rather than the model vendor.
 - The headline token total is deliberately input plus output. Compare cache
   and reasoning totals separately.
+- The dashboard shows the data in the CSVs it is given. When the newest data is
+  older than 14 days it shows a banner prompting a re-export (adjust with
+  `--stale-after-days`); exports with 10,000 or more embedded rows also show a
+  scale warning.
 
 ## Development
 
