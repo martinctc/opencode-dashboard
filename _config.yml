@@ -75,6 +75,7 @@ exclude:
   - "*.py"
   - tests/
   - tools/
+  - static/
   - requirements.txt
   - requirements-dev.txt
   - "*.csv"

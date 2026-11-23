@@ -247,3 +247,18 @@ def test_cli_accepts_stale_after_days(tmp_path):
 
     assert result == 0
     assert '"staleAfterDays":5' in output.read_text(encoding="utf-8")
+
+
+def test_build_dashboard_inlines_static_assets(tmp_path):
+    from pathlib import Path
+
+    static_dir = Path(__file__).resolve().parent.parent / "static"
+    output = tmp_path / "dashboard.html"
+
+    build_dashboard(sample_data(), output)
+    html = output.read_text(encoding="utf-8")
+
+    # The CSS and JS are loaded from static/ and inlined verbatim, so the
+    # generated page stays self-contained without shipping the source files.
+    assert (static_dir / "dashboard.css").read_text(encoding="utf-8") in html
+    assert (static_dir / "dashboard.js").read_text(encoding="utf-8") in html

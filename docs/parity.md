@@ -32,6 +32,7 @@ worth porting unless OpenCode exposes the same thing.
 | Cost by model, pricing efficiency, reasoning effort | yes, data-gated |
 | Insights derived from the data | yes |
 | Client-side render layer (re-render without a rebuild) | yes |
+| Static CSS/JS extracted and inlined at build time | yes, formatted with Prettier |
 | Project / model / provider filters | yes |
 | Search, Only, Select all/none, Show more, Reset | yes |
 | Provider exclusion cascading to its models | yes |

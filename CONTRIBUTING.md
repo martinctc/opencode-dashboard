@@ -47,9 +47,19 @@ python tools/make_screenshots.py --html sample_dashboard.html --out-dir docs/ima
   snapshot) and writes a CSV export.
 - `dashboard.py` — renders one or more CSV exports into a self-contained HTML
   dashboard.
+- `static/` — the dashboard's CSS and JS, inlined into the generated HTML at
+  build time.
 - `tools/` — sample-data generator and screenshot tooling.
 - `tests/` — unit and browser tests.
 - `docs/` — the GitHub Pages documentation site.
+
+## Formatting
+
+The dashboard's CSS and JS live in `static/` and are formatted with Prettier:
+
+```powershell
+npx prettier@3 --write static/dashboard.js static/dashboard.css
+```
 
 ## Pull requests
 
