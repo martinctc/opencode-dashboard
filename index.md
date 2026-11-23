@@ -38,5 +38,6 @@ links into them are pointed at GitHub instead.
    | replace: '](CONTRIBUTING.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/CONTRIBUTING.md)'
    | replace: '](SECURITY.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/SECURITY.md)'
    | replace: '](SUPPORT.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/SUPPORT.md)'
-   | replace: '](CODE_OF_CONDUCT.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/CODE_OF_CONDUCT.md)' }}
+   | replace: '](CODE_OF_CONDUCT.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/CODE_OF_CONDUCT.md)'
+   | replace: '](CHANGELOG.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/CHANGELOG.md)' }}
 

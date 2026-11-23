@@ -21,6 +21,8 @@ import plotly.io as pio
 from plotly.offline import get_plotlyjs
 from plotly.utils import PlotlyJSONEncoder
 
+from _version import __version__
+
 
 # Columns every export must carry. Export metadata is deliberately absent:
 # exports written before versioning existed have neither `exported_at` nor
@@ -2480,6 +2482,7 @@ def build_dashboard(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--in", dest="input_pattern", default="opencode_usage_*.csv",
                         help="Input CSV path or glob pattern; when no directory is provided, exports/<pattern> is also checked")
     parser.add_argument("--out", type=Path, default=Path("usage_dashboard.html"),
