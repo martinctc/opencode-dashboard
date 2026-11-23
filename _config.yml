@@ -57,12 +57,11 @@ aux_links_new_tab: true
 back_to_top: true
 back_to_top_text: Back to top
 
-# This site is documentation only. It never publishes a generated dashboard,
-# because those embed the source rows - project names, models and dates - and
-# a dashboard built from real exports must not be published by accident. A
-# dashboard built from tools/make_sample_data.py contains no real usage data
-# and is safe to share locally, but it is gitignored so it never reaches this
-# site either.
+# The site is documentation plus one synthetic sample dashboard built in CI.
+# A dashboard built from real exports must never be published by accident, so
+# the Pages workflow generates the sample from tools/make_sample_data.py (which
+# contains no real usage data) and copies it into the built site after Jekyll
+# runs. Real exports are gitignored and never reach this site.
 #
 # The patterns below match the generated filenames from .gitignore. Do not use
 # a bare "*.html" pattern here: Jekyll applies exclude rules when reading theme
@@ -70,7 +69,8 @@ back_to_top_text: Back to top
 # _layouts/default.html and every page renders unstyled.
 #
 # docs/ is deliberately NOT excluded. Its Markdown is published and its images
-# are the screenshots the README embeds.
+# are the screenshots the README embeds. The community health files are
+# excluded: the README links to them on GitHub instead.
 exclude:
   - "*.py"
   - tests/
@@ -81,6 +81,11 @@ exclude:
   - usage_dashboard*.html
   - sample_dashboard*.html
   - out_test.html
+  # The README links to these on GitHub; they are not published as site pages.
+  - CONTRIBUTING.md
+  - SECURITY.md
+  - SUPPORT.md
+  - CODE_OF_CONDUCT.md
   # index.md pulls the README in with include_relative, which reads it from the
   # source tree and ignores this rule. Excluding it just stops the site
   # publishing a raw markdown copy alongside the rendered home page.

@@ -13,6 +13,9 @@ on:
       - "_config.yml"
       - ".github/workflows/pages.yml"
       - "docs/**"
+      - "dashboard.py"
+      - "tools/make_sample_data.py"
+      - "requirements.txt"
   workflow_dispatch:
 
 permissions:
@@ -37,6 +40,25 @@ jobs:
         with:
           source: ./
           destination: ./_site
+
+      # The sample dashboard is built from synthetic data (tools/make_sample_data.py)
+      # and written straight into the built site. It is added after Jekyll runs so
+      # the exclude rules above cannot drop it, and real exports are never involved.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Generate the synthetic sample dashboard
+        run: |
+          python tools/make_sample_data.py --out "$RUNNER_TEMP/sample_usage.csv"
+          python dashboard.py --in "$RUNNER_TEMP/sample_usage.csv" --out _site/sample_dashboard.html
 
       - uses: actions/upload-pages-artifact@v3
 
