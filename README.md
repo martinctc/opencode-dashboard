@@ -29,6 +29,27 @@ python extract_usage.py
 python dashboard.py --in "exports/opencode_usage_*.csv" --out usage_dashboard.html
 ```
 
+### Install as a command
+
+You can also install the tool and use the `opencode-dashboard` command:
+
+```powershell
+python -m pip install .
+opencode-dashboard export
+opencode-dashboard render --in "exports/opencode_usage_*.csv" --out usage_dashboard.html
+```
+
+With `pipx`:
+
+```powershell
+pipx install .
+opencode-dashboard export
+opencode-dashboard render --in "exports/opencode_usage_*.csv" --out usage_dashboard.html
+```
+
+The `python extract_usage.py` and `python dashboard.py` commands above keep
+working; the console command is a wrapper around the same code.
+
 Open `usage_dashboard.html` in a browser. The exporter discovers the default
 database location when possible. Pass `--db` to select a custom location:
 

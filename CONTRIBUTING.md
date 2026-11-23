@@ -15,6 +15,12 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest
 ```
 
+For an editable install that also provides the `opencode-dashboard` command:
+
+```powershell
+python -m pip install -e .
+```
+
 Most tests are plain unit tests. `tests/test_dashboard_ux.py` additionally
 drives the generated dashboard in a real browser and skips itself when
 Playwright is unavailable:
