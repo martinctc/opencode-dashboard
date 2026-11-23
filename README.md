@@ -75,6 +75,9 @@ python dashboard.py --in sample_usage.csv --out sample_dashboard.html
 python tools/make_screenshots.py --html sample_dashboard.html --out-dir docs/images
 ```
 
+A live, interactive sample built from the same synthetic data is published on
+the [docs site](https://martinctc.github.io/opencode-dashboard/sample_dashboard.html).
+
 ## Metrics
 
 The export uses one row per session, day, provider, model, and variant.
@@ -154,6 +157,14 @@ python tools/make_screenshots.py --html sample_dashboard.html --out-dir docs/ima
 
 Captures each section at desktop and mobile widths. Regenerate after changing
 the dashboard layout. Requires the Playwright install above.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+development setup, tests, and pull request guidelines; [SECURITY.md](SECURITY.md)
+for how to report a vulnerability privately; [SUPPORT.md](SUPPORT.md) for where
+to ask questions and get help; and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for
+community guidelines.
 
 ## Attribution and related projects
 

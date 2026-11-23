@@ -1,0 +1,17 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing
+    url: https://github.com/martinctc/opencode-dashboard/blob/main/CONTRIBUTING.md
+    about: Development setup, tests, and pull request guidelines.
+  - name: Support
+    url: https://github.com/martinctc/opencode-dashboard/blob/main/SUPPORT.md
+    about: Where to ask questions and get help.
+  - name: Community discussions
+    url: https://github.com/martinctc/opencode-dashboard/discussions
+    about: Discuss ideas and ask the community.
+  - name: Code of conduct
+    url: https://github.com/martinctc/opencode-dashboard/blob/main/CODE_OF_CONDUCT.md
+    about: Community guidelines.
+  - name: Report a security vulnerability
+    url: https://github.com/martinctc/opencode-dashboard/security/advisories/new
+    about: Report security issues privately. Do not open a public issue.

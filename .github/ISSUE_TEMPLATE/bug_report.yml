@@ -1,0 +1,79 @@
+name: Bug report
+description: Something isn't working as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in the fields below so the
+        problem can be reproduced. For security issues, do **not** use this
+        template — see SECURITY.md instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+      placeholder: The dashboard renders the cost section as "insufficient data" even though the export contains cost_usd values.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact commands you ran.
+      placeholder: |
+        1. Ran `python extract_usage.py`
+        2. Ran `python dashboard.py --in exports/opencode_usage_*.csv --out usage_dashboard.html`
+        3. Opened usage_dashboard.html in ...
+    validations:
+      required: true
+  - type: textarea
+    id: schema-error
+    attributes:
+      label: Schema / validation error
+      description: If the exporter reported a missing table or column, paste the full error here. Leave blank if not applicable.
+      render: shell
+      placeholder: |
+        error: missing required columns from table 'message': ['tokens']
+  - type: input
+    id: opencode-version
+    attributes:
+      label: OpenCode version
+      description: Output of `opencode --version`
+      placeholder: e.g. 0.5.2
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: e.g. 3.11.6
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install the dashboard?
+      options:
+        - pip (requirements.txt)
+        - pipx
+        - From source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, sample rows (redacted), or anything else that helps.

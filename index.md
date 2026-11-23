@@ -27,10 +27,16 @@ links into them are pointed at GitHub instead.
 {:toc}
 </details>
 
+<p><a href="{{ site.baseurl }}/sample_dashboard.html"><strong>Try the interactive sample dashboard</strong></a> — built from synthetic data, no real usage.</p>
+
 {% capture readme %}{% include_relative README.md %}{% endcapture %}
 {{ readme
    | replace: 'docs/compatibility.md', 'docs/compatibility.html'
    | replace: 'docs/parity.md', 'docs/parity.html'
    | replace: '](tools/make_sample_data.py)', '](https://github.com/martinctc/opencode-dashboard/blob/main/tools/make_sample_data.py)'
-   | replace: '](LICENSE)', '](https://github.com/martinctc/opencode-dashboard/blob/main/LICENSE)' }}
+   | replace: '](LICENSE)', '](https://github.com/martinctc/opencode-dashboard/blob/main/LICENSE)'
+   | replace: '](CONTRIBUTING.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/CONTRIBUTING.md)'
+   | replace: '](SECURITY.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/SECURITY.md)'
+   | replace: '](SUPPORT.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/SUPPORT.md)'
+   | replace: '](CODE_OF_CONDUCT.md)', '](https://github.com/martinctc/opencode-dashboard/blob/main/CODE_OF_CONDUCT.md)' }}
 
