@@ -32,9 +32,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
 
       - uses: actions/jekyll-build-pages@v1
         with:
@@ -46,7 +46,7 @@ jobs:
       # runner user cannot write into it. Copy the built site into a writable staging
       # directory, add the sample there, and publish that instead. Real exports are
       # never involved.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
           cache: pip
@@ -66,7 +66,7 @@ jobs:
           # stale-data banner that would otherwise fire on its fixed dates.
           python dashboard.py --in "$RUNNER_TEMP/sample_usage.csv" --out site/sample_dashboard.html --stale-after-days 0
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
@@ -78,4 +78,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
