@@ -691,7 +691,7 @@ def load_data(pattern: str) -> pd.DataFrame:
     return data
 
 
-def _warn_on_column_diff(frame_columns) -> None:
+def _warn_on_column_diff(frame_columns: list[tuple[Path, set[str]]]) -> None:
     """Warn when input exports do not share the same columns.
 
     pandas aligns columns by name when concatenating and fills gaps with NaN, so
