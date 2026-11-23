@@ -32,6 +32,7 @@ OUTPUT_COLUMNS = [
     "cache_write_tokens", "reasoning_tokens", "total_tokens", "cost_usd",
     "session_id", "export_format_version", "exported_at",
 ]
+DEFAULT_EXPORT_DIR = Path("exports")
 def default_db_path() -> Path:
     """Resolve the conventional OpenCode data directory, with env overrides."""
     if os.environ.get("OPENCODE_DATA_DIR"):
@@ -299,14 +300,15 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=default_db_path(),
                         help="OpenCode database path (default: detected user data directory)")
-    parser.add_argument("--out", type=Path, default=None, help="CSV output path")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="CSV output path (default: ./exports/opencode_usage_<user>_<date>.csv)")
     parser.add_argument("--user-label", default=None, help="Label for this export (default: OS username)")
     parser.add_argument("--include-session-title", action="store_true",
                         help="Include free-text session titles, which may contain sensitive information")
     args = parser.parse_args(argv)
-    out_path = args.out or Path(
-        f"opencode_usage_{args.user_label or getpass.getuser()}_"
-        f"{datetime.now().strftime('%Y-%m-%d')}.csv"
+    out_path = args.out or (
+        DEFAULT_EXPORT_DIR
+        / f"opencode_usage_{args.user_label or getpass.getuser()}_{datetime.now().strftime('%Y-%m-%d')}.csv"
     )
     try:
         with ReadOnlySnapshot(args.db) as conn:
@@ -318,6 +320,7 @@ def main(argv=None) -> int:
 
     exported_at = datetime.now(timezone.utc).isoformat()
     columns = OUTPUT_COLUMNS + (["session_title"] if args.include_session_title else [])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()

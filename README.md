@@ -26,7 +26,7 @@ Requirements: Python 3.9 or later and OpenCode session data on this machine.
 ```powershell
 python -m pip install -r requirements.txt
 python extract_usage.py
-python dashboard.py --in "opencode_usage_*.csv" --out usage_dashboard.html
+python dashboard.py --in "exports/opencode_usage_*.csv" --out usage_dashboard.html
 ```
 
 Open `usage_dashboard.html` in a browser. The exporter discovers the default

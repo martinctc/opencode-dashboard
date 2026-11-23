@@ -143,6 +143,7 @@ CATEGORICAL_COLORS = [
 ]
 
 TEMPLATE_NAME = "opencode"
+DEFAULT_EXPORT_DIR = Path("exports")
 
 
 def provider_colors(providers) -> dict:
@@ -556,12 +557,37 @@ SECTIONS = [
 ]
 
 
-def load_data(pattern: str) -> pd.DataFrame:
+def _pattern_includes_directory(pattern: str) -> bool:
+    candidate = Path(pattern)
+    return (
+        candidate.is_absolute()
+        or candidate.parent != Path(".")
+        or ("/" in pattern)
+        or ("\\" in pattern)
+    )
+
+
+def _resolve_input_paths(pattern: str) -> tuple:
+    attempted = [pattern]
     paths = sorted(Path(path) for path in glob.glob(pattern))
     if not paths and Path(pattern).is_file():
         paths = [Path(pattern)]
+    if paths:
+        return paths, attempted
+    if not _pattern_includes_directory(pattern):
+        fallback = str(DEFAULT_EXPORT_DIR / pattern)
+        attempted.append(fallback)
+        paths = sorted(Path(path) for path in glob.glob(fallback))
+        if paths:
+            return paths, attempted
+    return [], attempted
+
+
+def load_data(pattern: str) -> pd.DataFrame:
+    paths, attempted = _resolve_input_paths(pattern)
     if not paths:
-        raise FileNotFoundError(f"No input CSV files matched: {pattern}")
+        tried = "; ".join(attempted)
+        raise FileNotFoundError(f"No input CSV files matched: {pattern} (tried: {tried})")
     frames = []
     for path in paths:
         frame = pd.read_csv(path)
@@ -2317,7 +2343,7 @@ def build_dashboard(
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--in", dest="input_pattern", default="opencode_usage_*.csv",
-                        help="Input CSV path or glob pattern")
+                        help="Input CSV path or glob pattern; when no directory is provided, exports/<pattern> is also checked")
     parser.add_argument("--out", type=Path, default=Path("usage_dashboard.html"),
                         help="HTML output path")
     parser.add_argument("--exclude-project", action="store_true",
