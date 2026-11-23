@@ -41,9 +41,11 @@ jobs:
           source: ./
           destination: ./_site
 
-      # The sample dashboard is built from synthetic data (tools/make_sample_data.py)
-      # and written straight into the built site. It is added after Jekyll runs so
-      # the exclude rules above cannot drop it, and real exports are never involved.
+      # The sample dashboard is built from synthetic data (tools/make_sample_data.py).
+      # jekyll-build-pages runs in a container and leaves _site owned by root, so the
+      # runner user cannot write into it. Copy the built site into a writable staging
+      # directory, add the sample there, and publish that instead. Real exports are
+      # never involved.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
@@ -57,10 +59,14 @@ jobs:
 
       - name: Generate the synthetic sample dashboard
         run: |
+          mkdir -p site
+          cp -R _site/. site/
           python tools/make_sample_data.py --out "$RUNNER_TEMP/sample_usage.csv"
-          python dashboard.py --in "$RUNNER_TEMP/sample_usage.csv" --out _site/sample_dashboard.html
+          python dashboard.py --in "$RUNNER_TEMP/sample_usage.csv" --out site/sample_dashboard.html
 
       - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
 
   deploy:
     needs: build
