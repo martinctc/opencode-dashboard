@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from _version import __version__
+
 
 EXPORT_FORMAT_VERSION = "1"
 REQUIRED_SCHEMA = {
@@ -67,6 +69,42 @@ def validate_schema(conn: sqlite3.Connection, db_path: Path) -> None:
             f"extractor expects:\n  - {details}\n"
             "The local schema can change between OpenCode releases."
         )
+
+
+def schema_report(conn: sqlite3.Connection, db_path: Path) -> str:
+    """Describe the detected schema without requiring it to match.
+
+    Used by --schema-report so a user can see what the installed OpenCode
+    version provides before reporting an incompatibility.
+    """
+    tables = {}
+    for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+    ):
+        name = row[0]
+        tables[name] = [
+            info[1] for info in conn.execute(f'PRAGMA table_info("{name}")')
+        ]
+
+    lines = [f"OpenCode database: {db_path}", "", "Detected tables:"]
+    if not tables:
+        lines.append("  (none)")
+    for name in sorted(tables):
+        columns = ", ".join(tables[name]) or "(no columns)"
+        lines.append(f"  - {name}: {columns}")
+
+    lines.append("")
+    lines.append("Required schema:")
+    for table, required in REQUIRED_SCHEMA.items():
+        if table not in tables:
+            lines.append(f"  - {table}: missing table")
+            continue
+        missing = sorted(required - set(tables[table]))
+        if missing:
+            lines.append(f"  - {table}: missing column(s): {', '.join(missing)}")
+        else:
+            lines.append(f"  - {table}: OK")
+    return "\n".join(lines)
 
 
 class ReadOnlySnapshot:
@@ -301,14 +339,25 @@ def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool) -
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--db", type=Path, default=default_db_path(),
                         help="OpenCode database path (default: detected user data directory)")
+    parser.add_argument("--schema-report", action="store_true",
+                        help="Print the detected database tables and columns, then exit")
     parser.add_argument("--out", type=Path, default=None,
                         help="CSV output path (default: ./exports/opencode_usage_<user>_<date>.csv)")
     parser.add_argument("--user-label", default=None, help="Label for this export (default: OS username)")
     parser.add_argument("--include-session-title", action="store_true",
                         help="Include free-text session titles, which may contain sensitive information")
     args = parser.parse_args(argv)
+    if args.schema_report:
+        try:
+            with ReadOnlySnapshot(args.db) as conn:
+                print(schema_report(conn, args.db))
+        except (FileNotFoundError, RuntimeError, sqlite3.Error) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        return 0
     out_path = args.out or (
         DEFAULT_EXPORT_DIR
         / f"opencode_usage_{args.user_label or getpass.getuser()}_{datetime.now().strftime('%Y-%m-%d')}.csv"
