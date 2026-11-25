@@ -106,7 +106,9 @@ before sharing them. Generated data files are excluded by `.gitignore`.
 ## Limitations
 
 - OpenCode's local database schema is not a stable public API. Check
-  [Compatibility](docs/compatibility.md) when OpenCode changes.
+  [Compatibility](docs/compatibility.md) when OpenCode changes; last tested
+  against OpenCode 2.1.4 on 2026-11-23. Run `python extract_usage.py
+  --schema-report` to print the schema the installed version provides.
 - Reported costs depend on the provider and pricing information available to
   OpenCode. The dashboard displays recorded cost and does not imply that it
   equals a provider invoice.

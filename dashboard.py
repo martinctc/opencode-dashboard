@@ -34,6 +34,11 @@ REQUIRED_COLUMNS = {
     "variant", "session_id",
 }
 
+# Columns whose absence is expected and already covered by a dedicated warning:
+# legacy exports predate exported_at, and exports without export_format_version
+# predate versioning. Do not double-report them as a column mismatch.
+OPTIONAL_METADATA_COLUMNS = {"exported_at", "export_format_version"}
+
 # The newest export format this dashboard understands. An export from a later
 # format may carry columns that are read as absent here, so it is reported
 # rather than silently rendered as if it were this version.
@@ -620,8 +625,10 @@ def load_data(pattern: str) -> pd.DataFrame:
         tried = "; ".join(attempted)
         raise FileNotFoundError(f"No input CSV files matched: {pattern} (tried: {tried})")
     frames = []
+    frame_columns = []
     for path in paths:
         frame = pd.read_csv(path)
+        frame_columns.append((path, set(frame.columns)))
         missing = sorted(REQUIRED_COLUMNS - set(frame.columns))
         if missing:
             raise ValueError(f"{path} is missing required columns: {', '.join(missing)}")
@@ -648,6 +655,7 @@ def load_data(pattern: str) -> pd.DataFrame:
             if frame[column].isna().any() or (frame[column] < 0).any():
                 raise ValueError(f"{path} has missing or negative values in {column}")
         frames.append(frame)
+    _warn_on_column_diff(frame_columns)
     data = pd.concat(frames, ignore_index=True)
     identity = ["user", "session_id", "date", "provider", "model", "variant"]
     if data["variant"].isna().any():
@@ -683,6 +691,34 @@ def load_data(pattern: str) -> pd.DataFrame:
             )
             data = data.drop_duplicates(identity, keep="last")
     return data
+
+
+def _warn_on_column_diff(frame_columns: list[tuple[Path, set[str]]]) -> None:
+    """Warn when input exports do not share the same columns.
+
+    pandas aligns columns by name when concatenating and fills gaps with NaN, so
+    a missing column does not fail the load - it silently becomes missing data.
+    Say which file lacks what rather than letting that pass unnoticed.
+    """
+    if len(frame_columns) < 2:
+        return
+    compared = [
+        (path, columns - OPTIONAL_METADATA_COLUMNS)
+        for path, columns in frame_columns
+    ]
+    union = set().union(*(columns for _, columns in compared))
+    if all(columns == union for _, columns in compared):
+        return
+    details = []
+    for path, columns in compared:
+        missing = sorted(union - columns)
+        if missing:
+            details.append(f"{path} is missing: {', '.join(missing)}")
+    warnings.warn(
+        "Exports do not all carry the same columns; rows are combined and "
+        "missing values are filled in.\n  - " + "\n  - ".join(details),
+        RuntimeWarning,
+    )
 
 
 def _warn_on_export_version(frame: pd.DataFrame, path: Path) -> None:
