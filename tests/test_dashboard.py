@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from dashboard import build_dashboard, load_data, main, redact_data
+from _version import __version__
 
 
 def sample_data():
@@ -285,3 +286,11 @@ def test_load_data_does_not_warn_about_optional_export_metadata(tmp_path):
         load_data(str(tmp_path / "*.csv"))
 
     assert not any("same columns" in str(warning.message) for warning in caught)
+
+
+def test_cli_reports_version(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+
+    assert excinfo.value.code == 0
+    assert __version__ in capsys.readouterr().out

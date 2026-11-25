@@ -204,6 +204,11 @@ Any use of Microsoft trademarks is subject to
 and use of Microsoft trademarks or logos here must not imply Microsoft
 sponsorship or endorsement. This is an independent community project.
 
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org). Release notes
+live in [CHANGELOG.md](CHANGELOG.md).
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from extract_usage import main, read_usage, validate_schema
+from _version import __version__
 
 
 @pytest.fixture
@@ -125,3 +126,11 @@ def test_schema_report_reports_missing_columns(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "missing table" in out
     assert "message: missing column(s):" in out
+
+
+def test_cli_reports_version(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+
+    assert excinfo.value.code == 0
+    assert __version__ in capsys.readouterr().out
