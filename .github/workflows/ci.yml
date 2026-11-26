@@ -5,6 +5,11 @@ name: Tests
 # The browser job therefore installs Chromium and runs the full suite rather
 # than the bare one, so a rendering regression fails the build the same way a
 # syntax error does.
+#
+# The unit job also runs on Windows and macOS because the extractor's default
+# database-path detection is OS-specific. Python 3.9 is only tested on Ubuntu:
+# ubuntu-latest is now 26.04, which has no 3.9 build, so that leg is pinned to
+# 24.04.
 on:
   push:
     branches: ["main"]
@@ -20,20 +25,21 @@ concurrency:
 
 jobs:
   unit:
-    # Pinned to 24.04 because ubuntu-latest is now 26.04, which no longer
-    # provides a Python 3.9 build, and the matrix below tests the 3.9 floor the
-    # README promises. Revisit when 3.9 is dropped or a 26.04 build appears.
-    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        # README promises 3.9 or later, so the floor is tested alongside the
-        # current stable release rather than assumed.
+        os: [ubuntu-24.04, windows-latest, macos-latest]
         python-version: ["3.9", "3.14"]
+        exclude:
+          - os: windows-latest
+            python-version: "3.9"
+          - os: macos-latest
+            python-version: "3.9"
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -46,12 +52,60 @@ jobs:
       - name: Run tests
         run: python -m pytest tests -q
 
+  types:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Type check
+        run: python -m mypy
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        run: |
+          set -o pipefail
+          python -m pytest tests -q --cov=dashboard --cov=extract_usage --cov-report=term-missing | tee coverage.txt
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          {
+            echo "## Coverage"
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   browser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           # The version the browser suite is actually exercised on locally.
           python-version: "3.14"

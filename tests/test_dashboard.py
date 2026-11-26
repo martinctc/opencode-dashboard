@@ -1,11 +1,15 @@
 import json
 import re
+import subprocess
+import sys
 import warnings
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from dashboard import build_dashboard, load_data, main, redact_data
+from _version import __version__
 
 
 def sample_data():
@@ -262,3 +266,70 @@ def test_build_dashboard_inlines_static_assets(tmp_path):
     # generated page stays self-contained without shipping the source files.
     assert (static_dir / "dashboard.css").read_text(encoding="utf-8") in html
     assert (static_dir / "dashboard.js").read_text(encoding="utf-8") in html
+
+
+def test_sample_data_cli_is_byte_identical(tmp_path):
+    """Regenerating the sample CSV twice must produce identical bytes.
+
+    The sample is seeded and fixed-date, so drift here would make the published
+    screenshots and the sample dashboard non-reproducible.
+    """
+    script = Path(__file__).resolve().parent.parent / "tools" / "make_sample_data.py"
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+
+    for out in (first, second):
+        subprocess.run(
+            [sys.executable, str(script), "--out", str(out)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_load_data_warns_when_export_columns_differ(tmp_path):
+    base = sample_data()
+    base["variant"] = "high"
+    base["exported_at"] = "2026-10-06T10:00:00+00:00"
+    with_title = base.copy()
+    with_title["session_id"] = "session-2"
+    with_title["session_title"] = "A title"
+    without_title = base.copy()
+    without_title["session_id"] = "session-3"
+    with_title.to_csv(tmp_path / "a.csv", index=False)
+    without_title.to_csv(tmp_path / "b.csv", index=False)
+
+    with pytest.warns(RuntimeWarning, match="same columns") as record:
+        load_data(str(tmp_path / "*.csv"))
+
+    messages = [str(warning.message) for warning in record]
+    assert any("session_title" in message for message in messages)
+
+
+def test_load_data_does_not_warn_about_optional_export_metadata(tmp_path):
+    base = sample_data()
+    base["variant"] = "high"
+    base["exported_at"] = "2026-10-06T10:00:00+00:00"
+    stamped = base.copy()
+    stamped["session_id"] = "session-2"
+    unstamped = base.copy()
+    unstamped["session_id"] = "session-3"
+    unstamped = unstamped.drop(columns=["exported_at"])
+    stamped.to_csv(tmp_path / "a.csv", index=False)
+    unstamped.to_csv(tmp_path / "b.csv", index=False)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load_data(str(tmp_path / "*.csv"))
+
+    assert not any("same columns" in str(warning.message) for warning in caught)
+
+
+def test_cli_reports_version(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+
+    assert excinfo.value.code == 0
+    assert __version__ in capsys.readouterr().out

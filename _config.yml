@@ -87,6 +87,7 @@ exclude:
   - SECURITY.md
   - SUPPORT.md
   - CODE_OF_CONDUCT.md
+  - CHANGELOG.md
   # index.md pulls the README in with include_relative, which reads it from the
   # source tree and ignores this rule. Excluding it just stops the site
   # publishing a raw markdown copy alongside the rendered home page.

@@ -106,7 +106,9 @@ before sharing them. Generated data files are excluded by `.gitignore`.
 ## Limitations
 
 - OpenCode's local database schema is not a stable public API. Check
-  [Compatibility](docs/compatibility.md) when OpenCode changes.
+  [Compatibility](docs/compatibility.md) when OpenCode changes; last tested
+  against OpenCode 2.1.4 on 2026-11-23. Run `python extract_usage.py
+  --schema-report` to print the schema the installed version provides.
 - Reported costs depend on the provider and pricing information available to
   OpenCode. The dashboard displays recorded cost and does not imply that it
   equals a provider invoice.
@@ -125,6 +127,16 @@ before sharing them. Generated data files are excluded by `.gitignore`.
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest
 ```
+
+Type-check and coverage run in CI as well:
+
+```powershell
+python -m mypy
+python -m pytest tests --cov=dashboard --cov=extract_usage --cov-report=term-missing
+```
+
+CI runs the unit suite on Ubuntu, Windows, and macOS (Python 3.9 on Ubuntu,
+3.14 everywhere) and the browser suite on Linux.
 
 Most tests are plain unit tests. `tests/test_dashboard_ux.py` additionally
 drives the generated dashboard in a real browser, and skips itself when
@@ -201,6 +213,11 @@ Any use of Microsoft trademarks is subject to
 [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general.aspx),
 and use of Microsoft trademarks or logos here must not imply Microsoft
 sponsorship or endorsement. This is an independent community project.
+
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org). Release notes
+live in [CHANGELOG.md](CHANGELOG.md).
 
 ## Licence
 
