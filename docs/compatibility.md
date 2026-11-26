@@ -14,9 +14,15 @@ titles; message IDs, session IDs and JSON data containing assistant-message
 timestamps; and project IDs and names. The exact schema can change between
 OpenCode releases.
 
+**Known good:** OpenCode 2.1.4, last tested 2026-11-23. If the exporter reports
+a missing table or column, run `python extract_usage.py --schema-report` to
+print the schema the installed version provides.
+
 The extractor opens the source read-only, creates a consistent SQLite backup,
 and validates required columns before reading. If validation fails, it stops
-with the missing table or columns listed in the error.
+with the missing table or columns listed in the error. Run
+`python extract_usage.py --schema-report` to dump the detected tables and
+columns without exporting, which is the fastest way to see what changed.
 
 Use `--db` to provide the database path explicitly. Otherwise, the extractor
 checks `OPENCODE_DATA_DIR`, `XDG_DATA_HOME`, and the default per-user OpenCode
