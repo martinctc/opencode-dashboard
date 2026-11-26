@@ -11,8 +11,10 @@ import glob
 import html
 import json
 import warnings
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import plotly.express as px
@@ -164,7 +166,7 @@ TEMPLATE_NAME = "opencode"
 DEFAULT_EXPORT_DIR = Path("exports")
 
 
-def provider_colors(providers) -> dict:
+def provider_colors(providers: Iterable[str]) -> dict[str, str]:
     """Assign each provider a fixed hue, in alphabetical order.
 
     Keying colour by name rather than by rank keeps a provider's colour stable
@@ -223,7 +225,7 @@ def infer_vendor(model: str, gateway: str) -> str:
     return gateway
 
 
-def vendor_colors(data: pd.DataFrame) -> tuple:
+def vendor_colors(data: pd.DataFrame) -> tuple[dict[str, str], dict[str, str]]:
     """Map each model to a vendor, and each vendor to a stable hue.
 
     Returns `(model_to_vendor, vendor_palette)`. Colour is keyed by vendor name
@@ -603,7 +605,7 @@ def _pattern_includes_directory(pattern: str) -> bool:
     )
 
 
-def _resolve_input_paths(pattern: str) -> tuple:
+def _resolve_input_paths(pattern: str) -> tuple[list[Path], list[str]]:
     attempted = [pattern]
     paths = sorted(Path(path) for path in glob.glob(pattern))
     if not paths and Path(pattern).is_file():
@@ -779,7 +781,7 @@ def _fmt_cost(value: float) -> str:
     return f"${value:,.2f}"
 
 
-def _escape(value) -> str:
+def _escape(value: object) -> str:
     """Escape a value from the data before interpolating it into HTML.
 
     Project and model names come from disk; without this a name containing
@@ -788,7 +790,7 @@ def _escape(value) -> str:
     return html.escape(str(value), quote=True)
 
 
-def _json_for_script(value) -> str:
+def _json_for_script(value: object) -> str:
     """Serialise a value for embedding inside a <script> element.
 
     A `</script>` sequence inside a JSON string would close the tag early and
@@ -2226,7 +2228,7 @@ CLIENT_JS = r"""
 """
 
 
-def _client_rows(data: pd.DataFrame) -> list:
+def _client_rows(data: pd.DataFrame) -> list[dict[str, object]]:
     """The rows the page needs, trimmed to the columns it actually uses."""
     columns = [
         "date", "project", "provider", "model", "calls", "input_tokens",
@@ -2234,17 +2236,17 @@ def _client_rows(data: pd.DataFrame) -> list:
         "reasoning_tokens", "total_tokens", "cost_usd", "session_id",
     ]
     has_variant = "variant" in data.columns
-    rows = []
+    rows: list[dict[str, object]] = []
     for record in data.to_dict("records"):
-        row = {column: record[column] for column in columns}
+        row: dict[str, object] = {column: record[column] for column in columns}
         row["date"] = pd.Timestamp(record["date"]).date().isoformat()
         row["variant"] = record.get("variant") or "n/a" if has_variant else "n/a"
         rows.append(row)
     return rows
 
 
-def _client_config(data: pd.DataFrame, rows: list, generated_at: str,
-                   stale_after_days: int = DEFAULT_STALE_AFTER_DAYS) -> dict:
+def _client_config(data: pd.DataFrame, rows: list[dict[str, object]], generated_at: str,
+                   stale_after_days: int = DEFAULT_STALE_AFTER_DAYS) -> dict[str, object]:
     """Everything the client needs that is not per-row data."""
     model_to_vendor, vendor_palette = vendor_colors(data)
     return {
@@ -2516,7 +2518,7 @@ def build_dashboard(
     out_path.write_text(html, encoding="utf-8")
 
 
-def main(argv=None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--in", dest="input_pattern", default="opencode_usage_*.csv",

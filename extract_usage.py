@@ -18,6 +18,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Literal, Optional
 
 from _version import __version__
 
@@ -111,14 +112,15 @@ class ReadOnlySnapshot:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self.temp_dir = None
-        self.connection = None
+        self.temp_dir: Optional[str] = None
+        self.connection: Optional[sqlite3.Connection] = None
 
     def __enter__(self) -> sqlite3.Connection:
         if not self.db_path.is_file():
             raise FileNotFoundError(f"OpenCode database not found: {self.db_path}")
         self.temp_dir = tempfile.mkdtemp(prefix="opencode_usage_")
-        snapshot_path = Path(self.temp_dir) / "snapshot.db"
+        temp_dir = self.temp_dir
+        snapshot_path = Path(temp_dir) / "snapshot.db"
         source = None
         destination = None
         try:
@@ -130,10 +132,11 @@ class ReadOnlySnapshot:
             source.backup(destination)
             destination.close()
             destination = None
-            self.connection = sqlite3.connect(
+            connection = sqlite3.connect(
                 f"{snapshot_path.resolve().as_uri()}?mode=ro", uri=True
             )
-            return self.connection
+            self.connection = connection
+            return connection
         except sqlite3.Error as exc:
             self._cleanup()
             raise RuntimeError(
@@ -145,7 +148,7 @@ class ReadOnlySnapshot:
             if destination is not None:
                 destination.close()
 
-    def _cleanup(self):
+    def _cleanup(self) -> None:
         if self.connection is not None:
             self.connection.close()
             self.connection = None
@@ -153,12 +156,12 @@ class ReadOnlySnapshot:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
             self.temp_dir = None
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> Literal[False]:
         self._cleanup()
         return False
 
 
-def _nonnegative_number(value, label: str) -> float:
+def _nonnegative_number(value: object, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"Invalid {label} in OpenCode message data: {value!r}")
     if (isinstance(value, float) and not math.isfinite(value)) or value < 0:
@@ -172,7 +175,7 @@ def _project_name(directory: str, name: str) -> str:
     return value.rsplit("/", 1)[-1] or "(unknown)"
 
 
-def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool):
+def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool) -> list[dict[str, Any]]:
     # Newer OpenCode versions store sessions in session_v2; fall back to session
     tables = {
         row[0] for row in conn.execute(
@@ -180,7 +183,7 @@ def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool):
         )
     }
     session_table = "session_v2" if "session_v2" in tables else "session"
-    grouped = {}
+    grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
     
     # Try new schema first (session_message)
     if "session_message" in tables:
@@ -217,7 +220,7 @@ def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool):
             day = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).date().isoformat()
             identity = (session_id, day, provider, model_id, variant)
             if identity not in grouped:
-                record = {
+                record: dict[str, Any] = {
                     "source": "OpenCode",
                     "user": user_label,
                     "date": day,
@@ -334,7 +337,7 @@ def read_usage(conn: sqlite3.Connection, user_label: str, include_title: bool):
     return list(grouped.values())
 
 
-def main(argv=None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--db", type=Path, default=default_db_path(),

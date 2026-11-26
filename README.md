@@ -128,6 +128,16 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest
 ```
 
+Type-check and coverage run in CI as well:
+
+```powershell
+python -m mypy
+python -m pytest tests --cov=dashboard --cov=extract_usage --cov-report=term-missing
+```
+
+CI runs the unit suite on Ubuntu, Windows, and macOS (Python 3.9 on Ubuntu,
+3.14 everywhere) and the browser suite on Linux.
+
 Most tests are plain unit tests. `tests/test_dashboard_ux.py` additionally
 drives the generated dashboard in a real browser, and skips itself when
 Playwright is unavailable:

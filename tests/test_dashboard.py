@@ -1,6 +1,9 @@
 import json
 import re
+import subprocess
+import sys
 import warnings
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -248,6 +251,27 @@ def test_cli_accepts_stale_after_days(tmp_path):
 
     assert result == 0
     assert '"staleAfterDays":5' in output.read_text(encoding="utf-8")
+
+
+def test_sample_data_cli_is_byte_identical(tmp_path):
+    """Regenerating the sample CSV twice must produce identical bytes.
+
+    The sample is seeded and fixed-date, so drift here would make the published
+    screenshots and the sample dashboard non-reproducible.
+    """
+    script = Path(__file__).resolve().parent.parent / "tools" / "make_sample_data.py"
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+
+    for out in (first, second):
+        subprocess.run(
+            [sys.executable, str(script), "--out", str(out)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    assert first.read_bytes() == second.read_bytes()
 
 
 def test_load_data_warns_when_export_columns_differ(tmp_path):
