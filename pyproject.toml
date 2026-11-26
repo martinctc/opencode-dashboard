@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opencode-dashboard"
+dynamic = ["version"]
+description = "A local, read-only dashboard for exploring OpenCode token and cost usage."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Martin Chan" }]
+keywords = ["opencode", "dashboard", "usage", "tokens", "cost"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "pandas>=2.0",
+  "plotly>=5.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "mypy>=1.0",
+  "playwright",
+]
+
+[project.scripts]
+opencode-dashboard = "cli:main"
+
+[tool.hatch.version]
+path = "_version.py"
+
+[tool.hatch.build.targets.wheel]
+include = [
+  "cli.py",
+  "dashboard.py",
+  "extract_usage.py",
+  "_version.py",
+  "static/dashboard.css",
+  "static/dashboard.js",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "cli.py",
+  "dashboard.py",
+  "extract_usage.py",
+  "_version.py",
+  "static/",
+  "tests/",
+  "tools/",
+  "docs/",
+  "README.md",
+  "LICENSE",
+  "requirements.txt",
+  "requirements-dev.txt",
+]

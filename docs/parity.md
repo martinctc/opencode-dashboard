@@ -53,6 +53,7 @@ worth porting unless OpenCode exposes the same thing.
 | Community health files (CONTRIBUTING, SECURITY, SUPPORT, CODE_OF_CONDUCT) | yes |
 | Issue templates, Discussions, repository topics | yes |
 | Release versioning and CHANGELOG | yes, 0.1.0 |
+| Packaging (`pyproject.toml`, `opencode-dashboard` CLI) | yes, `export` / `render` |
 
 ## Not yet done
 
